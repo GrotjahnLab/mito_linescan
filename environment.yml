@@ -1,0 +1,17 @@
+name: mito_protein_scanner
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - numpy
+  - scipy
+  - matplotlib
+  - pandas
+  - scikit-image
+  - networkx
+  - tqdm
+  - click
+  - tifffile
+  - pip
+  - pip:
+    - sknw
