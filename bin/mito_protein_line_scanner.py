@@ -17,7 +17,7 @@ from matplotlib.widgets import Button
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib import cm
 import pandas as pd
-#from scipy.signal import find_peaks, peak_prominences
+#from scipy.signal import find_peaks, peak_prominences   
 import scipy.interpolate as interpolate
 
 #For local otsu thresholding
@@ -130,73 +130,7 @@ def lasso_select_cell(image):
     return mask
 
 
-def local_otsu_threshold(image, selem_radius=otsu_r, adjust_r=True):
-    """Compute local Otsu threshold for the given image."""
-    selem = disk(selem_radius)
-    #adjust the image range to -1 to 1
-    image = (image - image.min()) / (image.max() - image.min()) * 2 - 1
-    image_256 = (image - image.min()) / (image.max() - image.min()) * 255
 
-    local_otsu = rank.otsu(img_as_ubyte(image), selem)
-    #if the adjust_r start a plt.imshow and let the user decide the radius
-    # initial contrast limits
-    vmin0 = float(np.percentile(image, 1))
-    vmax0 = float(np.percentile(image, 99))
-
-    # clamp initial radius and compute a sensible max
-    selem_radius = max(1, int(selem_radius))
-    max_rad = max(1, min(image.shape) // 10)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plt.subplots_adjust(bottom=0.28)
-
-    im = ax.imshow(image, cmap='gray', vmin=vmin0, vmax=vmax0,alpha=1)
-    overlay = ax.imshow((image_256 > local_otsu).astype(np.uint8),
-                cmap=ListedColormap(['none', 'red']), alpha=0.5, vmin=0, vmax=1)
-    ax.set_title('Adjust Otsu radius and contrast. Click Done when finished.')
-
-    ax_rad = fig.add_axes([0.15, 0.18, 0.7, 0.03], facecolor='lightgoldenrodyellow')
-    ax_vmin = fig.add_axes([0.15, 0.12, 0.7, 0.03], facecolor='lightgoldenrodyellow')
-    ax_vmax = fig.add_axes([0.15, 0.06, 0.7, 0.03], facecolor='lightgoldenrodyellow')
-
-    s_radius = Slider(ax_rad, 'Radius', 1, max_rad, valinit=selem_radius, valstep=1)
-    s_vmin = Slider(ax_vmin, 'Min', float(image.min()), float(image.max()), valinit=vmin0)
-    s_vmax = Slider(ax_vmax, 'Max', float(image.min()), float(image.max()), valinit=vmax0)
-
-    done = {'pressed': False}
-
-    def recompute_and_update(_=None):
-        # recompute local Otsu with integer radius
-        r = max(1, int(s_radius.val))
-        nonlocal local_otsu
-        local_otsu = rank.otsu(img_as_ubyte(image), disk(r))
-        # update overlay (image > local_otsu)
-        mask = (image_256 > local_otsu).astype(np.uint8)
-        overlay.set_data(mask)
-        # update contrast
-        vmin = s_vmin.val
-        vmax = s_vmax.val
-        if vmin < vmax:
-            im.set_clim(vmin, vmax)
-        fig.canvas.draw_idle()
-
-    s_radius.on_changed(recompute_and_update)
-    s_vmin.on_changed(recompute_and_update)
-    s_vmax.on_changed(recompute_and_update)
-
-    ax_done = fig.add_axes([0.85, 0.01, 0.1, 0.04])
-    btn_done = Button(ax_done, 'Done')
-
-    def on_done(event):
-        done['pressed'] = True
-        plt.close(fig)
-
-    btn_done.on_clicked(on_done)
-
-    # initial draw
-    recompute_and_update()
-    plt.show()
-    return local_otsu
 
 def select_threshold(image):
     """
