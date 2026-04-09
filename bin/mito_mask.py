@@ -7,7 +7,7 @@ Processes microscopy images to analyze mitochondrial and scan structures.
 
 import os
 import click
-import tiffile as tf
+import tifffile as tf
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -16,42 +16,17 @@ from matplotlib.path import Path
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib import cm
 import pandas as pd
-
-def create_colormaps():
-    """Create custom colormaps for mitochondria and scan visualization."""
-    # Mitochondria colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 1] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    mito_cmap = ListedColormap(vals)
-
-    # Scan colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 1] = np.sqrt(np.linspace(64/256, 1, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    scan_cmap = ListedColormap(vals)
-    
-    return mito_cmap, scan_cmap
+from .utils import create_colormaps
 
 
 def draw_mitochondria(mito_image, scan_image):
-        # Prepare indices assuming mito_image shape is (Z, Y, X)
-
+    '''    
+    Draw mitochondria region using lasso selector and return binary mask. Switch channels if they are flipped.
+    '''
     y_pixels = mito_image.shape[0]
     x_pixels = mito_image.shape[1]
 
 
-    # Compute figure size so pixels are displayed with correct proportions
-    # Keep a fixed display height (in inches) and scale widths by image aspect ratios
-    # Z view (axis 0) slices have shape (Y, X)
-    # Y view (axis 1) slices have shape (Z, X)
-    display_height = 6.0
     fig = plt.figure()
 
     ax_z = fig.add_subplot(111)
@@ -100,50 +75,27 @@ def draw_mitochondria(mito_image, scan_image):
     inside_mask_2d = inside_mask_2d.astype(mito_image.dtype)
     return inside_mask_2d, switch_channels
 
-
-def create_colormaps():
-    """Create custom colormaps for mitochondria and scan visualization."""
-    # Mitochondria colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 1] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    mito_cmap = ListedColormap(vals)
-
-    # Scan colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 1] = np.sqrt(np.linspace(64/256, 1, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    scan_cmap = ListedColormap(vals)
-    
-    return mito_cmap, scan_cmap
-
 @click.command()
-@click.option('--i', help='Input Directory', required=True)
-@click.option('--o', default='', help='Output directory (optional, default is same as input)', required=False)
-def main(i, o):
-    input_image = i
+@click.option('--input-directory', help='Input Directory', required=True)
+@click.option('--manual-mask-directory', default='', help='Output directory for manually drawn masks (optional, default is same as input)', required=False)
+def main(input_directory, manual_mask_directory):
+    input_image_dir = input_directory
     scan_width = 7
     
-    image_list = [f for f in os.listdir(input_image) if f.endswith('.tif')]
+    image_list = [f for f in os.listdir(input_image_dir) if f.endswith('.tif')]
     if not image_list:
-        print(f"No TIFF files found in directory: {input_image}")
+        print(f"No TIFF files found in directory: {input_image_dir}")
         return
     for input_image in image_list:
         
         basename = os.path.basename(input_image)
         basename = basename[:basename.find(".tif")]
 
-        output_image_path = os.path.join(o, f"{basename}_mito_mask.tif") if o else os.path.join(i, f"{basename}_mito_mask.tif")
+        output_image_path = os.path.join(manual_mask_directory, f"{basename}_mito_mask.tif") if manual_mask_directory else os.path.join(input_image_dir, f"{basename}_mito_mask.tif")
         mito_channel = 1
         target_channel = 0
 
-        image = tf.imread(os.path.join(i, input_image))
+        image = tf.imread(os.path.join(input_image_dir, input_image))
         print(f"Input file: {input_image}, shape: {image.shape}, dtype: {image.dtype}")
         
         mito_image = image[mito_channel, :, :]

@@ -7,7 +7,7 @@ Processes microscopy images to analyze mitochondrial and scan structures.
 
 import os
 import click
-import tiffile as tf
+import tifffile as tf
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -19,31 +19,9 @@ import pandas as pd
 from scipy import ndimage
 from scipy.ndimage import distance_transform_edt, binary_dilation
 from scipy.ndimage import gaussian_filter
-from mito_protein_omm_localization import weighted_average_scan
-def create_colormaps():
-    """Create custom colormaps for mitochondria and scan visualization."""
-    # Mitochondria colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 1] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    mito_cmap = ListedColormap(vals)
+from .utils import weighted_average_scan, create_colormaps
 
-    # Scan colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 1] = np.sqrt(np.linspace(64/256, 1, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    scan_cmap = ListedColormap(vals)
-    
-    return mito_cmap, scan_cmap
-
-
-def refine_mask_edges(mask_image, mito_image, scan_width=3):
+def refine_mask_edges(mask_image, mito_image, scan_width=5):
     """
     Refine mask edges by scanning perpendicular to edges to find mito signal centroid.
     
@@ -119,20 +97,20 @@ def refine_mask_edges(mask_image, mito_image, scan_width=3):
                 scan_intensities.append(weighted_average_scan(mito_normalized, scan_y, scan_x, 3))
                 scan_distances.append(dist)
         
-        # Find centroid of intensity along the normal
+        # Find the peak intensity along the scan 
         if len(scan_intensities) > 0:
             scan_intensities = np.array(scan_intensities)
             scan_distances = np.array(scan_distances)
             
-            # Weighted average to find centroid
+            # Find the peak intensity along the scan and its corresponding distance
             if scan_intensities.sum() > 0:
-                centroid_dist = np.average(scan_distances, weights=scan_intensities)
+                peak_dist = np.argmax(scan_intensities)
             else:
-                centroid_dist = 0
+                peak_dist = 0
             
             # Calculate refined position
-            refined_y = y + normal_y * centroid_dist
-            refined_x = x + normal_x * centroid_dist
+            refined_y = y + normal_y * scan_distances[peak_dist]
+            refined_x = x + normal_x * scan_distances[peak_dist]
             
             # Round to nearest pixel
             refined_y = int(np.round(refined_y))
@@ -154,28 +132,28 @@ def refine_mask_edges(mask_image, mito_image, scan_width=3):
     return refined_mask.astype(mask_image.dtype)
 
 @click.command()
-@click.option('--i', help='Input Image Directory', required=True)
-@click.option('--mask_channel', help='Mask channel index (optional, default=0)', default=0, required=False)
-@click.option('--mito_channel', help='Mitochondria channel index (optional, default=1)', default=1, required=False)
-@click.option('--target_channel', help='Scan channel index (optional, default=2)', default=2, required=False)
-@click.option('--o', default='', help='Output directory (optional, default is same as input)', required=False)
-def main(i, o, mask_channel, mito_channel, target_channel):
+@click.option('--input-directory', help='Input Image Directory', required=True)
+@click.option('--mask-channel', help='Mask channel index (optional, default=0)', default=0, required=False)
+@click.option('--mito-channel', help='Mitochondria channel index (optional, default=1)', default=1, required=False)
+@click.option('--target-channel', help='Scan channel index (optional, default=2)', default=2, required=False)
+@click.option('--refined-mask-directory', default='', help='Output directory for refined masks (optional, default is same as input)', required=False)
+def main(input_directory, refined_mask_directory, mask_channel, mito_channel, target_channel):
     scan_width = 3
     # Create output directory if it doesn't exist
-    if o and not os.path.exists(o):
-        os.makedirs(o)
+    if refined_mask_directory and not os.path.exists(refined_mask_directory):
+        os.makedirs(refined_mask_directory)
     
     
-    image_list = [f for f in os.listdir(i) if f.endswith('.tif')]
+    image_list = [f for f in os.listdir(input_directory) if f.endswith('.tif')]
     if not image_list:
-        print(f"No TIFF files found in directory: {i}")
+        print(f"No TIFF files found in directory: {input_directory}")
         return
     for input_image in image_list:
-        input_image_path = os.path.join(i, input_image)
+        input_image_path = os.path.join(input_directory, input_image)
         basename = os.path.basename(input_image)
         basename = basename[:basename.find(".tif")]
 
-        output_image_path = os.path.join(o, f"{basename}_mito_mask.tif") if o else os.path.join(i, f"{basename}_mito_mask.tif")
+        output_image_path = os.path.join(refined_mask_directory, f"{basename}_mito_mask.tif") if refined_mask_directory else os.path.join(input_directory, f"{basename}_mito_mask.tif")
         
             #read the image and extract channels (assuming the image is in (channels, height, width) format)
         with tf.TiffFile(input_image_path) as tif:

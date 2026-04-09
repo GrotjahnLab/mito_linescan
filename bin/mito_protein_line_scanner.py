@@ -5,7 +5,7 @@ import glob
 
 import click
 import tqdm
-import tiffile as tf
+import tifffile as tf
 import numpy as np
 import matplotlib.pyplot as plt
 

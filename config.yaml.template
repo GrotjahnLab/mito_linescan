@@ -1,0 +1,40 @@
+# Mito Location Configuration File
+# Configure the parameters for different mitochondrial analysis workflows
+
+# Draw mask: Interactive mask drawing for mitochondrial structures
+draw_mask:
+  input_directory: '/path/to/input/directory'  # Input directory with TIFF images
+  manual_mask_directory: '/path/to/output/directory'  # Output directory for manually drawn masks (optional, defaults to input directory)
+
+# Mask refine: Refine mask edges using intensity information
+refine_mask:
+  input_directory: '/path/to/input/directory'  # Input directory with mask images
+  refined_mask_directory: '/path/to/output/directory'  # Output directory for refined masks
+  mask_channel: 0  # Channel index for mask (0-based)
+  mito_channel: 1  # Channel index for mitochondria (0-based)
+  target_channel: 2  # Channel index for target/scan signal (0-based)
+
+# OMM Normal Scan: Scan protein on outer mitochondrial membrane using surface normals
+omm_normal_scan:
+  input_directory: '/path/to/images/'  # Input directory with TIFF images
+  output_directory: '/path/to/output/'  # Output directory
+  mito_channel: 1  # Mitochondria channel index (0-based)
+  scan_channel: 0  # Scan/protein channel index (0-based)
+  mask_channel: 2  # Mask channel index (0-based)
+  scan_width: 7  # Width of scan lines in pixels
+  sampling_radius: 3  # Radius for weighted average sampling in pixels
+  mito_thickness_threshold: 1  # Initial erosion value for mask (1-20)
+
+# Line scan: Scan protein distribution along mitochondrial network
+network_line_scan:
+  input_dir: '20251021_decon_data/tiff'  # Input directory containing TIFF images
+  input_pattern: 'snap*.tiff'  # Pattern to match input TIFF files
+  mask_dir_output: '20251021_decon_data/tiff/masks'  # Output directory for masks
+  mask_dir_input: '20251021_decon_data/tiff/masks/'  # Input directory for existing masks
+  run_name: 'run1'  # Run name suffix for output directories
+  mito_channel: 0  # 0-based index for mitochondria channel
+  protein_channel: 2  # 0-based index for protein channel
+  use_gui: true  # Use interactive GUI for threshold selection
+  scan_width: 4  # Pixels on each side of the path for scanning
+  path_sampling: 5  # Number of subpixel samples along the normal
+  min_path_length: 30  # Minimum path length to process

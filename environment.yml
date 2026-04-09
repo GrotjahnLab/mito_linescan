@@ -11,9 +11,9 @@ dependencies:
   - networkx
   - tqdm
   - click
-  - tifffile
+  - pyyaml
   - pip
   - pip:
     - sknw
-    - tiffile
+    - tifffile
     - -e .

@@ -10,10 +10,7 @@ import os
 import glob
 
 import click
-import tqdm
-import cc3d
-import tiffile as tf
-import cv2
+import tifffile as tf
 import numpy as np
 import matplotlib.pyplot as plt
 from skimage.morphology import disk
@@ -25,71 +22,14 @@ from matplotlib.path import Path
 from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib import cm
 import pandas as pd
+from scipy.ndimage import binary_erosion
 from scipy.signal import find_peaks, peak_prominences
 from skimage import exposure
 import scipy.interpolate as interpolate
 import pickle
 import json
+from .utils import weighted_average_scan, create_colormaps
 
-def create_colormaps():
-    """Create custom colormaps for mitochondria and scan visualization."""
-    # Mitochondria colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 1] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 1, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    mito_cmap = ListedColormap(vals)
-
-    # Scan colormap
-    N = 256
-    vals = np.ones((N, 4))
-    vals[:, 0] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 1] = np.sqrt(np.linspace(64/256, 1, N))
-    vals[:, 2] = np.sqrt(np.linspace(0/256, 64/256, N))
-    vals[:, 3] = np.sqrt(np.linspace(0/256, 256/256, N))
-    scan_cmap = ListedColormap(vals)
-    
-    return mito_cmap, scan_cmap
-
-
-def weighted_average_scan(image, x, y, radius):
-    """
-    Calculate weighted average of image centered on (x, y) with given radius.
-    
-    Args:
-        image: 2D numpy array (image)
-        x: x-coordinate (row index)
-        y: y-coordinate (column index)
-        radius: radius around the point to sample
-        
-    Returns:
-        Weighted average with weights 1/(1+distance)
-    """
-    height, width = image.shape
-    weighted_sum = 0.0
-    weight_sum = 0.0
-    
-    # Define the bounding box for sampling
-    x_min = max(0, int(x - radius))
-    x_max = min(height, int(x + radius + 1))
-    y_min = max(0, int(y - radius))
-    y_max = min(width, int(y + radius + 1))
-    
-    # Sample all points within the radius
-    for i in range(x_min, x_max):
-        for j in range(y_min, y_max):
-            distance = np.sqrt((i - x)**2 + (j - y)**2)
-            if distance <= radius:
-                weight = 1.0 / (1.0 + distance)
-                weighted_sum += image[i, j] * weight
-                weight_sum += weight
-    
-    if weight_sum > 0:
-        return weighted_sum / weight_sum
-    else:
-        return 0.0
 
 
 def interactive_mask_erosion(mito_image, mask_image):
@@ -115,7 +55,7 @@ def interactive_mask_erosion(mito_image, mask_image):
     ax.imshow(mito_image, cmap='gray')
     
     # Create initial eroded mask
-    eroded_mask = cv2.erode(mask_image.astype(np.uint8), disk(initial_erosion).astype(np.uint8), iterations=1)
+    eroded_mask = binary_erosion(mask_image, structure=disk(initial_erosion)).astype(np.uint8)
     
     # Overlay the mask with transparency
     mask_display = ax.imshow(eroded_mask, cmap='Reds', alpha=0.5)
@@ -133,7 +73,7 @@ def interactive_mask_erosion(mito_image, mask_image):
         erosion_value = int(slider.val)
         
         # Erode the mask with the new value
-        eroded_mask = cv2.erode(mask_image.astype(np.uint8), disk(erosion_value).astype(np.uint8), iterations=1)
+        eroded_mask = binary_erosion(mask_image, structure=disk(erosion_value)).astype(np.uint8)
         
         # Update the mask overlay
         mask_display.set_data(eroded_mask)
@@ -148,30 +88,30 @@ def interactive_mask_erosion(mito_image, mask_image):
 
 
 @click.command()
-@click.option('--i', type=click.Path(exists=True))
-@click.option('--o', default='test/', help='Output directory')
-@click.option('--mito_ch', default=1, help='Mitochondria channel index (0-based)')
-@click.option('--scan_ch', default=0, help='Scan channel index (0-based)')
-@click.option('--mask_ch', default=2, help='Mask channel index (0-based)')
-@click.option('--scan_width', default=7, help='Width of scan lines in pixels')
-@click.option('--sampling_radius', default=3, help='Radius for weighted average sampling in pixels')
-@click.option('--mito_thickness_threshold', default=1, help='Initial erosion value for mask (1-20)')
-def main(i, o, mito_ch, scan_ch, mask_ch, scan_width, sampling_radius, mito_thickness_threshold):
+@click.option('--input-directory', type=click.Path(exists=True))
+@click.option('--output-directory', default='test/', help='Output directory')
+@click.option('--mito-channel', default=1, help='Mitochondria channel index (0-based)')
+@click.option('--scan-channel', default=0, help='Scan channel index (0-based)')
+@click.option('--mask-channel', default=2, help='Mask channel index (0-based)')
+@click.option('--scan-width', default=7, help='Width of scan lines in pixels')
+@click.option('--sampling-radius', default=3, help='Radius for weighted average sampling in pixels')
+@click.option('--mito-thickness-threshold', default=1, help='Ignore areas where mitochondria are thinner than this threshold (in pixels)')
+def main(input_directory, output_directory, mito_channel, scan_channel, mask_channel, scan_width, sampling_radius, mito_thickness_threshold):
     '''
     Main function to process images and analyze mitochondrial localization.
-    Example usage: python mito_septin_localization.py --i /path/to/images/ --o /path/to/output/ --mito_ch 1 --scan_ch 0 --mask_ch 2 --scan_width 7 --sampling_radius 3 --mito_thickness_threshold 1
+    Example usage: python mito_protein_omm_normal_scanner.py --input-directory /path/to/images/ --output-directory /path/to/output/ --mito-channel 1 --scan-channel 0 --mask-channel 2 --scan-width 7 --sampling-radius 3 --mito-thickness-threshold 1
     '''
-    input_image = i
-    output_dir = o
+    input_image = input_directory
+    output_dir = output_directory
 
     scan_width = scan_width
     
     #mito_cmap, scan_cmap = create_colormaps()
     basename = os.path.basename(input_image)
     
-    mito_channel = mito_ch
-    target_channel = scan_ch
-    mask_channel = mask_ch
+    mito_ch = mito_channel
+    target_channel = scan_channel
+    mask_ch = mask_channel
 
     #read the image and extract channels (assuming the image is in (channels, height, width) format)
     with tf.TiffFile(input_image) as tif:
@@ -184,9 +124,9 @@ def main(i, o, mito_ch, scan_ch, mask_ch, scan_width, sampling_radius, mito_thic
     if image.ndim == 2:
         raise ValueError(f"Image is 2D with shape {image.shape}. Expected 3D (pages, height, width). Check if this is a multi-page TIFF.")
     
-    mito_image = image[mito_channel, :, :]
+    mito_image = image[mito_ch, :, :]
     target_image = image[target_channel, :, :]
-    mask_image = image[mask_channel, :, :]
+    mask_image = image[mask_ch, :, :]
 
     distance = mask_image.copy()
     distance = cv2.distanceTransform(distance.astype(np.uint8), distanceType=cv2.DIST_L2, maskSize=5).astype(np.float32)
@@ -345,8 +285,6 @@ def main(i, o, mito_ch, scan_ch, mask_ch, scan_width, sampling_radius, mito_thic
                 mask_intensity_array = []
                 valid_normal_x = []
                 valid_normal_y = []
-                
-                sampling_radius = 3  # Radius for weighted averaging
                 
                 for j in range(len(normal_x)):
                     if (normal_x[j] < 0 or normal_x[j] >= target_image.shape[0] or 
