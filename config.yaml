@@ -3,8 +3,12 @@
 
 # Draw mask: Interactive mask drawing for mitochondrial structures
 draw_mask:
-  input_directory: '/path/to/input/directory'  # Input directory with TIFF images
+  input_directory: 'data'  # Input directory with TIFF images
   manual_mask_directory: '/path/to/output/directory'  # Output directory for manually drawn masks (optional, defaults to input directory)
+  mito_channel: 0  # Channel index for mitochondria (0-based)
+  target_channel: 1  # Channel index for target/scan signal (0-based)
+  scan_width: 7  # Width of scan lines in pixels
+  sampling_radius: 3  # Radius for weighted average sampling in pixels
 
 # Mask refine: Refine mask edges using intensity information
 refine_mask:
@@ -16,11 +20,11 @@ refine_mask:
 
 # OMM Normal Scan: Scan protein on outer mitochondrial membrane using surface normals
 omm_normal_scan:
-  i: '/path/to/images/'  # Input directory with TIFF images
-  o: '/path/to/output/'  # Output directory
-  mito_ch: 1  # Mitochondria channel index (0-based)
-  scan_ch: 0  # Scan/protein channel index (0-based)
-  mask_ch: 2  # Mask channel index (0-based)
+  input_directory: '/path/to/images/'  # Input directory with TIFF images
+  output_directory: '/path/to/output/'  # Output directory
+  mito_channel: 1  # Mitochondria channel index (0-based)
+  scan_channel: 0  # Scan/protein channel index (0-based)
+  mask_channel: 2  # Mask channel index (0-based)
   scan_width: 7  # Width of scan lines in pixels
   sampling_radius: 3  # Radius for weighted average sampling in pixels
   mito_thickness_threshold: 1  # Initial erosion value for mask (1-20)

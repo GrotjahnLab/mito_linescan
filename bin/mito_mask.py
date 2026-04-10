@@ -101,9 +101,20 @@ def main(input_directory, manual_mask_directory, target_channel, mito_channel, s
         basename = basename[:basename.find(".tif")]
 
         output_image_path = os.path.join(manual_mask_directory, f"{basename}_mito_mask.tif") if manual_mask_directory else os.path.join(input_image_dir, f"{basename}_mito_mask.tif")
-        #if the output file already exists, skip processing
+        #if the output file already exists, prompt the user to overwrite or skip
         if os.path.exists(output_image_path):
-            print(f"Output file already exists, skipping: {output_image_path}")
+            while True:                    
+                    response = input(f"Invalid response. Output file already exists: {output_image_path}. Overwrite? (y/n): ")
+                    if response.lower() == 'n':
+                        print("Skipping...")
+                        break
+                    elif response.lower() == 'y':
+                        print("Overwriting...")
+                        break
+                    else:
+                        print("Invalid response. Please enter 'y' or 'n'.")
+        
+        if response.lower() == 'n':
             continue
         mito_channel = 1
         target_channel = 0
