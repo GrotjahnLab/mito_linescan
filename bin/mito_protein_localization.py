@@ -56,6 +56,10 @@ CONFIG_TEMPLATE = """# Mito Location Configuration File
 draw_mask:
   input_directory: '/path/to/input/directory'  # Input directory with TIFF images
   manual_mask_directory: '/path/to/output/directory'  # Output directory for manually drawn masks (optional, defaults to input directory)
+  mito_channel: 0  # Channel index for mitochondria (0-based)
+  target_channel: 1  # Channel index for target/scan signal (0-based)
+  scan_width: 7  # Width of scan lines in pixels
+  sampling_radius: 3  # Radius for weighted average sampling in pixels
 
 # Mask refine: Refine mask edges using intensity information
 refine_mask:
@@ -135,18 +139,19 @@ def create_config(output):
 
 
 @cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
 @click.pass_context
-def draw_mask(ctx):
+def draw_mask(ctx, config):
     """Draw mitochondrial mask (mito_mask.py)."""
-    config_file = ctx.obj['config']
+    config_file = config
     if not config_file:
         raise click.ClickException("--config option is required")
     
-    config = load_config(config_file)
-    if 'draw_mask' not in config:
+    config_data = load_config(config_file)
+    if 'draw_mask' not in config_data:
         raise click.ClickException("'draw_mask' section not found in config.yaml")
     
-    draw_mask_config = config['draw_mask']
+    draw_mask_config = config_data['draw_mask']
     args = config_to_args(draw_mask_config)
     
     click.echo(f"Running draw_mask with config: {draw_mask_config}")
@@ -157,18 +162,19 @@ def draw_mask(ctx):
 
 
 @cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
 @click.pass_context
-def refine_mask(ctx):
+def refine_mask(ctx, config):
     """Refine mask edges (mito_mask_refine.py)."""
-    config_file = ctx.obj['config']
+    config_file = config
     if not config_file:
         raise click.ClickException("--config option is required")
     
-    config = load_config(config_file)
-    if 'refine_mask' not in config:
+    config_data = load_config(config_file)
+    if 'refine_mask' not in config_data:
         raise click.ClickException("'refine_mask' section not found in config.yaml")
     
-    refine_mask_config = config['refine_mask']
+    refine_mask_config = config_data['refine_mask']
     args = config_to_args(refine_mask_config)
     
     click.echo(f"Running refine_mask with config: {refine_mask_config}")
@@ -179,18 +185,19 @@ def refine_mask(ctx):
 
 
 @cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
 @click.pass_context
-def omm_normal_scan(ctx):
+def omm_normal_scan(ctx, config):
     """Scan protein on outer mitochondrial membrane using surface normals (mito_protein_omm_normal_scanner.py)."""
-    config_file = ctx.obj['config']
+    config_file = config
     if not config_file:
         raise click.ClickException("--config option is required")
     
-    config = load_config(config_file)
-    if 'omm_normal_scan' not in config:
+    config_data = load_config(config_file)
+    if 'omm_normal_scan' not in config_data:
         raise click.ClickException("'omm_normal_scan' section not found in config.yaml")
     
-    omm_normal_scan_config = config['omm_normal_scan']
+    omm_normal_scan_config = config_data['omm_normal_scan']
     args = config_to_args(omm_normal_scan_config)
     
     click.echo(f"Running omm_normal_scan with config: {omm_normal_scan_config}")
@@ -201,18 +208,19 @@ def omm_normal_scan(ctx):
 
 
 @cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
 @click.pass_context
-def network_line_scan(ctx):
+def network_line_scan(ctx, config):
     """Scan protein along mitochondrial network (mito_protein_line_scanner.py)."""
-    config_file = ctx.obj['config']
+    config_file = config
     if not config_file:
         raise click.ClickException("--config option is required")
     
-    config = load_config(config_file)
-    if 'network_line_scan' not in config:
+    config_data = load_config(config_file)
+    if 'network_line_scan' not in config_data:
         raise click.ClickException("'network_line_scan' section not found in config.yaml")
     
-    network_line_scan_config = config['network_line_scan']
+    network_line_scan_config = config_data['network_line_scan']
     args = config_to_args(network_line_scan_config)
     
     click.echo(f"Running network_line_scan with config: {network_line_scan_config}")

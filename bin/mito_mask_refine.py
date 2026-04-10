@@ -17,11 +17,11 @@ from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 from matplotlib import cm
 import pandas as pd
 from scipy import ndimage
-from scipy.ndimage import distance_transform_edt, binary_dilation
+from scipy.ndimage import distance_transform_edt, binary_dilation, binary_erosion
 from scipy.ndimage import gaussian_filter
 from .utils import weighted_average_scan, create_colormaps
 
-def refine_mask_edges(mask_image, mito_image, scan_width=5):
+def refine_mask_edges(mask_image, mito_image, scan_width=5, smooth_window=10):
     """
     Refine mask edges by scanning perpendicular to edges to find mito signal centroid.
     
@@ -33,7 +33,8 @@ def refine_mask_edges(mask_image, mito_image, scan_width=5):
         Mitochondria intensity image
     scan_width : int
         Number of pixels to scan in each direction perpendicular to edge
-    
+    smooth_window : int
+        Size of the  smoothing window for gradients
     Returns:
     --------
     refined_mask : ndarray
@@ -94,7 +95,7 @@ def refine_mask_edges(mask_image, mito_image, scan_width=5):
             # Check bounds
             if 0 <= scan_y < mito_image.shape[0] and 0 <= scan_x < mito_image.shape[1]:
                 intensity = mito_normalized[scan_y, scan_x]
-                scan_intensities.append(weighted_average_scan(mito_normalized, scan_y, scan_x, 3))
+                scan_intensities.append(weighted_average_scan(mito_normalized, scan_y, scan_x, radius=3))
                 scan_distances.append(dist)
         
         # Find the peak intensity along the scan 
@@ -116,19 +117,53 @@ def refine_mask_edges(mask_image, mito_image, scan_width=5):
             refined_y = int(np.round(refined_y))
             refined_x = int(np.round(refined_x))
             
+            # Check if the movement is more than 3 pixels
+            movement = np.sqrt((refined_y - y)**2 + (refined_x - x)**2)
+            if movement > 3:
+                # Keep original position if movement is too large
+                refined_y = y
+                refined_x = x
+            
             # Check bounds and store refined coordinates
             if 0 <= refined_y < mask_image.shape[0] and 0 <= refined_x < mask_image.shape[1]:
                 refine_coords.append((refined_y, refined_x))
-            
-    #make a smoothed refined mask by filling in the refined coordinates and then applying a closing operation to fill in gaps
-    for y, x in refine_coords:
-        refined_mask[y, x] = True
-    # Apply binary closing to fill in gaps
-    refined_mask = binary_dilation(refined_mask, iterations=2)
-    #fill the holes in the mask
-    refined_mask = ndimage.binary_fill_holes(refined_mask)
-    #erode the mask slightly to get back to original size after dilation
-    refined_mask = ndimage.binary_erosion(refined_mask, iterations=2)
+    #Fit a single spline to all refined coordinates and oversample by 10x
+    refine_coords_oversampled = []
+    if len(refine_coords) >= 3:
+        refine_coords = np.array(refine_coords)
+        from scipy.interpolate import splprep, splev
+        try:
+            # Fit a single spline to all coordinates s= number of points to smooth the spline, adjust as needed
+            tck, u = splprep([refine_coords[:, 0], refine_coords[:, 1]], s=int(len(refine_coords)))
+            # Generate points along the spline with 10x oversampling
+            num_points = len(refine_coords) * 10
+            u_new = np.linspace(0, 1, num_points)
+            spline_coords = splev(u_new, tck)
+            # Store oversampled coordinates as float tuples
+            refine_coords_oversampled = list(zip(spline_coords[0], spline_coords[1]))
+        except Exception as e:
+            print(f"Warning: Spline fitting failed: {e}")
+            # Fall back to original coordinates
+            refine_coords_oversampled = [(float(c[0]), float(c[1])) for c in refine_coords]     
+
+    #make a smoothed refined mask by filling in the refined coordinates
+    if len(refine_coords_oversampled) > 0:
+        # Create a new mask from the refined edge coordinates
+        refined_mask = np.zeros_like(mask_image, dtype=bool)
+        
+        # Draw the refined boundary using oversampled float coordinates
+        for coord in refine_coords_oversampled:
+            y = int(np.round(coord[0]))
+            x = int(np.round(coord[1]))
+            if 0 <= y < refined_mask.shape[0] and 0 <= x < refined_mask.shape[1]:
+                refined_mask[y, x] = True
+        
+        # Dilate the boundary slightly to create a filled region
+        #refined_mask = binary_dilation(refined_mask, iterations=1)
+        
+        # Fill the holes in the mask
+        refined_mask = ndimage.binary_fill_holes(refined_mask)
+    
     return refined_mask.astype(mask_image.dtype)
 
 @click.command()
@@ -138,7 +173,6 @@ def refine_mask_edges(mask_image, mito_image, scan_width=5):
 @click.option('--target-channel', help='Scan channel index (optional, default=2)', default=2, required=False)
 @click.option('--refined-mask-directory', default='', help='Output directory for refined masks (optional, default is same as input)', required=False)
 def main(input_directory, refined_mask_directory, mask_channel, mito_channel, target_channel):
-    scan_width = 3
     # Create output directory if it doesn't exist
     if refined_mask_directory and not os.path.exists(refined_mask_directory):
         os.makedirs(refined_mask_directory)
@@ -195,7 +229,10 @@ def main(input_directory, refined_mask_directory, mask_channel, mito_channel, ta
         ax.axis('off')
         
         # Save the figure properly
-        output_png_path = os.path.join(o, f"{basename}_mito_mask_overlay.png")
+        output_png_dir = os.path.join(refined_mask_directory, "png_previews")
+        if not os.path.exists(output_png_dir):
+            os.makedirs(output_png_dir)
+        output_png_path = os.path.join(refined_mask_directory, f"png_previews/{basename}_mito_mask_overlay.png")
         fig.savefig(output_png_path, bbox_inches='tight', pad_inches=0, facecolor='black')
         plt.close(fig)
 

@@ -78,10 +78,19 @@ def draw_mitochondria(mito_image, scan_image):
 @click.command()
 @click.option('--input-directory', help='Input Directory', required=True)
 @click.option('--manual-mask-directory', default='', help='Output directory for manually drawn masks (optional, default is same as input)', required=False)
-def main(input_directory, manual_mask_directory):
+@click.option('--mito-channel', default=0, help='Channel index for mitochondria (0-based)', required=False)
+@click.option('--target-channel', default=1, help='Channel index for mask (0-based)', required=False)
+@click.option('--scan-width', default=7, help='Width of scan lines in pixels', required=False)
+@click.option('--sampling-radius', default=3, help='Radius for weighted average sampling in pixels', required=False)
+def main(input_directory, manual_mask_directory, target_channel, mito_channel, scan_width=5, sampling_radius=3):
     input_image_dir = input_directory
-    scan_width = 7
     
+    #if manual_mask_directory is not provided, save the output in the same input directory
+    if manual_mask_directory and not os.path.exists(manual_mask_directory):
+        os.makedirs(manual_mask_directory)
+    #if the manual_mask_directory does not exist, create it
+    if not os.path.exists(input_image_dir):
+        os.makedirs(input_image_dir)
     image_list = [f for f in os.listdir(input_image_dir) if f.endswith('.tif')]
     if not image_list:
         print(f"No TIFF files found in directory: {input_image_dir}")
@@ -92,6 +101,10 @@ def main(input_directory, manual_mask_directory):
         basename = basename[:basename.find(".tif")]
 
         output_image_path = os.path.join(manual_mask_directory, f"{basename}_mito_mask.tif") if manual_mask_directory else os.path.join(input_image_dir, f"{basename}_mito_mask.tif")
+        #if the output file already exists, skip processing
+        if os.path.exists(output_image_path):
+            print(f"Output file already exists, skipping: {output_image_path}")
+            continue
         mito_channel = 1
         target_channel = 0
 

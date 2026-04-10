@@ -49,6 +49,10 @@ The `config.yaml` file has sections for each workflow. Each section contains the
 draw_mask:
   input_directory: '/path/to/input/directory'
   manual_mask_directory: '/path/to/output/directory'
+  mito_channel: 0
+  target_channel: 1
+  scan_width: 7
+  sampling_radius: 3
 
 refine_mask:
   input_directory: '/path/to/input/directory'
@@ -86,6 +90,10 @@ network_line_scan:
 ### draw_mask
 - `input_directory`: Input directory containing TIFF images
 - `manual_mask_directory`: Output directory for manually drawn masks (optional, defaults to input directory)
+- `mito_channel`: Channel index for mitochondria (0-based)
+- `target_channel`: Channel index for target/scan signal (0-based)
+- `scan_width`: Width of scan lines in pixels
+- `sampling_radius`: Radius for weighted average sampling in pixels
 
 ### refine_mask
 - `input_directory`: Input directory with mask images
