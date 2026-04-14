@@ -102,6 +102,7 @@ def main(input_directory, manual_mask_directory, target_channel, mito_channel, s
 
         output_image_path = os.path.join(manual_mask_directory, f"{basename}_mito_mask.tif") if manual_mask_directory else os.path.join(input_image_dir, f"{basename}_mito_mask.tif")
         #if the output file already exists, prompt the user to overwrite or skip
+        response = 'y'  # default to overwrite
         if os.path.exists(output_image_path):
             while True:                    
                     response = input(f"Invalid response. Output file already exists: {output_image_path}. Overwrite? (y/n): ")
