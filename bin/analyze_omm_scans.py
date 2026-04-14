@@ -23,7 +23,7 @@ def smooth_profile(profile, window=5):
     """Apply moving average smoothing to a profile."""
     if len(profile) < window:
         return profile
-    smoothed = np.convolve(profile, np.ones(window)/window, mode='valid')
+    smoothed = np.convolve(profile, np.ones(window)/window, mode='same')
     return smoothed
 
 
@@ -62,102 +62,172 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
     normal_line_points_all = []
     
     # Collect all intensity profiles and calculate distances
-    for point_data in detailed_data:
-        mito_int = point_data['mito_intensities']
-        target_int = point_data['scan_intensities']
-        mask_int = point_data['mask_intensities']
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    ax.set_xlabel("Distance along normal (pixels)")
+    ax.set_ylabel("Intensity")
+    for idx, point_data in enumerate(detailed_data):
+        mito_int = np.array(point_data['mito_intensities'])
+        target_int = np.array(point_data['scan_intensities'])
+        mask_int = np.array(point_data['mask_intensities'])
         skeleton_point = point_data['skeleton_point']
         normal_line_points = point_data['normal_line_points']
+        distances = np.array(point_data['normal_distances'])
+
+        #smooth all the profiles
+        distances= smooth_profile(distances, window=3)
+        mito_int = smooth_profile(mito_int, window=3)
+        target_int = smooth_profile(target_int, window=3)
+        mask_int = smooth_profile(mask_int, window=3)
+
+        peaks, _ = find_peaks(mito_int)
+        prominences = peak_prominences(mito_int, peaks)[0]
+        #shift the distances so that the highest peak is at 0
+        if len(peaks) > 0:
+            highest_peak_idx = int(np.argmax(prominences))
+            highest_peak = int(peaks[highest_peak_idx])
+            distances = distances - distances[highest_peak]
+        ax.plot(distances, mito_int, color='blue', label='Mito Intensity' if idx == 0 else '')
+        ax.plot(distances, target_int, color='green', label='Scan Intensity' if idx == 0 else '')
+        ax.plot(distances, mask_int, color='orange', label='Mask Intensity' if idx == 0 else '')
+        ax.scatter(distances[peaks], mito_int[peaks], color='red', label='Peaks' if idx == 0 else '')
+        #for i, peak in enumerate(peaks):
+        #   ax.annotate(f'{mito_int[peak]:.2f}\n({distances[peak]:.2f})\nprom: {prominences[i]:.2f}', (distances[peak], mito_int[peak]), textcoords="offset points", xytext=(0,10), ha='center', fontsize=8)
+        #ax.set_title(f"Intensity profiles along normal for skeleton point {skeleton_point}")    
+    plt.legend()
+    plt.savefig(os.path.join(output_dir, f"{image_name}_intensity_profiles.png"), dpi=150, bbox_inches='tight')
+    plt.close()
+
+
+    #Now that the shifted distnces are there, we can make a cumulative plot of all the profiles, for that we go through -0.8 to 0.8 of the range of distances and calculate the average intensity of all profiles at each distance, then plot that with a shaded area for the standard deviation. We can also plot the individual profiles with low opacity in the background to show the variability.
+    all_distances = np.concatenate([point_data['normal_distances'] for point_data in detailed_data])
+    min_distance = np.min(all_distances)
+    max_distance = np.max(all_distances)
+    distance_range = max_distance - min_distance
+    # Use -0.8 to 0.8 of the range
+    normalized_min = -0.8 * distance_range / 2
+    normalized_max = 0.8 * distance_range / 2
+    distance_grid = np.linspace(normalized_min, normalized_max, 100)
+    
+    mito_interp_profiles = []
+    target_interp_profiles = []
+    mask_interp_profiles = []
+    
+    for point_data in detailed_data:
+        mito_int = np.array(point_data['mito_intensities'])
+        target_int = np.array(point_data['scan_intensities'])
+        mask_int = np.array(point_data['mask_intensities'])
+        distances = np.array(point_data['normal_distances'])
         
+        if len(distances) < 2:
+            continue
+        
+        peaks, _ = find_peaks(mito_int)
+        prominences = peak_prominences(mito_int, peaks)[0]
+        #shift the distances so that the highest peak is at 0
+        if len(peaks) > 0:
+            highest_peak_idx = int(np.argmax(prominences))
+            highest_peak = int(peaks[highest_peak_idx])
+            distances = distances - distances[highest_peak]
+        try:
+            mito_interp = np.interp(distance_grid, distances, mito_int)
+            target_interp = np.interp(distance_grid, distances, target_int)
+            mask_interp = np.interp(distance_grid, distances, mask_int)
+        except Exception as e:
+            print(f"Error interpolating profile: {e}")
+            continue
+        
+        # Smooth interpolated profiles
+        mito_interp = smooth_profile(mito_interp, window=3)
+        target_interp = smooth_profile(target_interp, window=3)
+        mask_interp = smooth_profile(mask_interp, window=3)
+        
+        # Filter based on target profile meeting peak and prominence thresholds
+        target_peaks, _ = find_peaks(target_interp)
+        if len(target_peaks) == 0:
+            continue
+        target_prominences = peak_prominences(target_interp, target_peaks)[0]
+        highest_target_peak_idx = int(np.argmax(target_prominences))
+        highest_target_peak = target_peaks[highest_target_peak_idx]
+        
+        # Check if highest peak meets thresholds
+        if target_interp[highest_target_peak] < intensity_threshold or target_prominences[highest_target_peak_idx] < prominence_threshold:
+            continue
+
+        mito_interp_profiles.append(mito_interp)
+        target_interp_profiles.append(target_interp)
+        mask_interp_profiles.append(mask_interp)
+
+    # Convert lists to arrays outside the loop
+    if mito_interp_profiles:
+        mito_interp_profiles = np.array(mito_interp_profiles)
+        target_interp_profiles = np.array(target_interp_profiles)
+        mask_interp_profiles = np.array(mask_interp_profiles)
+        
+        # Calculate mean and standard deviation
+        mito_mean = np.mean(mito_interp_profiles, axis=0)
+        mito_std = np.std(mito_interp_profiles, axis=0)
+        target_mean = np.mean(target_interp_profiles, axis=0)
+        target_std = np.std(target_interp_profiles, axis=0)
+        mask_mean = np.mean(mask_interp_profiles, axis=0)
+        mask_std = np.std(mask_interp_profiles, axis=0)
+        
+        # Create cumulative plot
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        # Plot individual profiles with low opacity
+        for profile in mito_interp_profiles:
+            ax.plot(distance_grid, profile, color='blue', alpha=0.1, linewidth=0.5)
+        for profile in target_interp_profiles:
+            ax.plot(distance_grid, profile, color='green', alpha=0.1, linewidth=0.5)
+        for profile in mask_interp_profiles:
+            ax.plot(distance_grid, profile, color='orange', alpha=0.1, linewidth=0.5)
+        # Plot mean with shaded error area
+        ax.plot(distance_grid, mito_mean, color='blue', linewidth=2, label='Mito Mean')
+        ax.fill_between(distance_grid, mito_mean - mito_std, mito_mean + mito_std, 
+                        color='blue', alpha=0.2, label='Mito ± 1 SD')
+        
+        ax.plot(distance_grid, target_mean, color='green', linewidth=2, label='Target Mean')
+        ax.fill_between(distance_grid, target_mean - target_std, target_mean + target_std, 
+                        color='green', alpha=0.2, label='Target ± 1 SD')
+
+        ax.axvline(x=0, color='black', linestyle='--', alpha=0.5, linewidth=1)
+        ax.set_xlabel('Distance along normal (pixels)', fontsize=12)
+        ax.set_ylabel('Intensity', fontsize=12)
+        ax.set_title(f'{image_name} - Mito {mito_id} - Cumulative Profiles', fontsize=14)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=11)
+        
+        plt.tight_layout()
+        output_file_cumulative = os.path.join(output_dir, f'{image_name}_mito_{mito_id}_intensity_profiles_cumulative.png')
+        plt.savefig(output_file_cumulative, dpi=150, bbox_inches='tight')
+        print(f"Saved cumulative profile plot to {output_file_cumulative}")
+        plt.close()
+
+
+    if False:
+        print(point_data['normal_distances'])
         # Only include if we have data
         if len(mito_int) > 0:
-            # Calculate distances from the first point to each normal line point
-            distances = []
-            for (nx, ny) in normal_line_points:
-                dist = np.sqrt((nx - normal_line_points[0][0])**2 + (ny - normal_line_points[0][1])**2)
-                distances.append(dist)
-            # Calculate the distances from the last point to each normal line point
-            distances_rev = []
-            for (nx, ny) in normal_line_points:
-                dist = np.sqrt((nx - normal_line_points[-1][0])**2 + (ny - normal_line_points[-1][1])**2)
-                distances_rev.append(dist)
-            
             mito_intensities_all.append(mito_int)
             target_intensities_all.append(target_int)
             mask_intensities_all.append(mask_int)
             distances_all.append(distances)
-            distances_rev_all.append(distances_rev)
             normal_line_points_all.append(normal_line_points)
-    
-    # Orient profiles based on mask intensities
-    # If first half average > second half average, reverse all three
-    for i in range(len(mask_intensities_all)):
-        mask_int = np.array(mask_intensities_all[i])
-        midpoint = len(mask_int) // 2
-        first_half_avg = np.mean(mask_int[:midpoint])
-        second_half_avg = np.mean(mask_int[midpoint:])
-        
-        if first_half_avg > second_half_avg:
-            #mito_intensities_all[i] = mito_intensities_all[i][::-1]
-            #target_intensities_all[i] = target_intensities_all[i][::-1]
-            #mask_intensities_all[i] = mask_intensities_all[i][::-1]
-            distances_all[i] = distances_rev_all[i]
-    
 
     
-    # Create figure with 3 subplots
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    fig.suptitle(f'Intensity Profiles - Mito {mito_id} ({image_name})', fontsize=16)
-    
-    # Plot mito intensities
-    for i, profile in enumerate(mito_intensities_all):
-        axes[0].plot(distances_all[i], profile, color='blue', alpha=0.1, linewidth=0.5)
-    axes[0].set_title('Mito Intensities')
-    axes[0].set_xlabel('Distance from skeleton (pixels)')
-    axes[0].set_ylabel('Intensity')
-    axes[0].set_facecolor('white')
-    axes[0].grid(True, alpha=0.3)
-    
-    # Plot target intensities
-    for i, profile in enumerate(target_intensities_all):
-        axes[1].plot(distances_all[i], profile, color='green', alpha=0.1, linewidth=0.5)
-    axes[1].set_title('Target Intensities')
-    axes[1].set_xlabel('Distance from skeleton (pixels)')
-    axes[1].set_ylabel('Intensity')
-    axes[1].set_facecolor('white')
-    axes[1].grid(True, alpha=0.3)
-    
-    # Plot mask intensities
-    for i, profile in enumerate(mask_intensities_all):
-        axes[2].plot(distances_all[i], profile, color='red', alpha=0.1, linewidth=0.5)
-    axes[2].set_title('Mask Intensities')
-    axes[2].set_xlabel('Distance from skeleton (pixels)')
-    axes[2].set_ylabel('Intensity')
-    axes[2].set_facecolor('white')
-    axes[2].grid(True, alpha=0.3)
-    
-    plt.tight_layout()
-    
-    # Save the plot
-    output_file = os.path.join(output_dir, f'{image_name}_mito_{mito_id}_intensity_profiles.png')
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"Saved plot to {output_file}")
-    plt.close()
-    
-    #average all the aligned lines and plot them and save
-    fig, ax = plt.subplots(figsize=(12, 6))
-    fig.suptitle(f'Average Aligned Intensity Profiles (mito > 0.2 at x=0) - Mito {mito_id} ({image_name})', fontsize=14)
-    
-    threshold = 0.05
     aligned_mito_profiles = []
     aligned_target_profiles = []
+    aligned_mask_profiles = []
+    aligned_distances_list = []
     target_com_values = []
     mito_peak_values = []
     mito_com_points = []
     target_com_points = []
     mito_gaussian_fit_params = []
-    mito_gaussian_points = []
+    shifted_distances_all = []
+    
 
+    #for each profile, find the highest peak and calculate its distance, then shift distances so that this peak is at 0. Also calculate the center of mass of the target profile and its distance, and save all these values for plotting and CSV output. Only include profiles where the highest peak is above the intensity and prominence thresholds.
     for i, profile in enumerate(mito_intensities_all):
         mito_profile = np.array(profile)
         
@@ -168,42 +238,69 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         # get the highest peak and check if its  intensity and prominence are above the thresholds
         if len(peaks) == 0:
             continue
-        highest_peak_idx = np.argmax(prominences)
-        highest_peak = peaks[highest_peak_idx]
+        highest_peak_idx = int(np.argmax(prominences))
+        highest_peak = int(peaks[highest_peak_idx])
         if mito_profile[highest_peak] < intensity_threshold or prominences[highest_peak_idx] < prominence_threshold:
             continue
         
         mito_peak = highest_peak
         # Shift distances so Gaussian center is at 0
-        shifted_distances = np.array(distances_all[i]) - mito_peak
+        mito_peak_dist = distances_all[i][mito_peak]
+        shifted_distances = np.array(distances_all[i]) - mito_peak_dist
         #calculate the center of mass of scan intensities on shifted distances, to see what side of the mito the septin is on
         target_profile = np.array(target_intensities_all[i])
-        target_com = np.sum(np.array(distances_all[i]) * target_profile) / np.sum(target_profile)
+        target_com = np.sum(shifted_distances * target_profile) / np.sum(target_profile)
         
         # Find the actual image points corresponding to mito_com and target_com
-        mito_peak_dist = distances_all[i][mito_peak]
-
-
-
-        # For COM: find which distance corresponds to the COM value
-        # com is relative to shifted_distances, need to convert back to original distance
+        
         # Find closest normal_line_point to this distance
-        closest_idx = np.argmin(np.abs(np.array(distances_all[i]) - target_com))
+        closest_idx = int(np.argmin(np.abs(shifted_distances - target_com)))
         target_com_point = normal_line_points_all[i][closest_idx]
         
         mito_peak_values.append(mito_peak_dist)
         mito_com_points.append(mito_peak_dist)
         target_com_values.append(target_com)
         target_com_points.append(target_com_point)
-        print(f"Profile {i}: Mito COM at {mito_peak_dist:.2f} -> {mito_peak_dist}, Target COM at {target_com:.2f} -> {target_com_point}")
+        shifted_distances_all.append(shifted_distances) 
+        #print(f"Profile {i}: Mito Peak at {mito_peak_dist:.2f} -> {mito_peak_dist}, Target COM at {target_com:.2f} -> {target_com_point}")
 
-        aligned_mito_profiles.append(np.interp(np.linspace(shifted_distances[0], shifted_distances[-1], 100), shifted_distances, mito_profile))
-        aligned_target_profiles.append(np.interp(np.linspace(shifted_distances[0], shifted_distances[-1], 100), shifted_distances, target_profile))
+        # Create aligned distance array matching the interpolated profiles
+        #aligned_distances = np.linspace(shifted_distances[0], shifted_distances[-1], 100)
+        aligned_distances_list.append(shifted_distances)
+        
+        #aligned_mito_profiles.append(np.interp(aligned_distances, shifted_distances, mito_profile))
+        #aligned_target_profiles.append(np.interp(aligned_distances, shifted_distances, target_profile))
+        #aligned_mask_profiles.append(np.interp(aligned_distances, shifted_distances, mask_intensities_all[i]))
     
+    #Plot individual aligned profiles with their distances
+    if not aligned_mito_profiles:
+        print(f"No valid profiles found for {image_name} mito {mito_id}")
+        return None
+    plt.figure(figsize=(6, 4))
+    for i in range(len(aligned_mito_profiles)):
+
+        print(f"Plotting profile {i+1}/{len(aligned_mito_profiles)} for {image_name} mito {mito_id}")
+        plt.plot(distances_all[i], mito_intensities_all[i], color='blue', alpha=0.5, label='Mito' if i == 0 else "")
+        plt.plot(distances_all[i], target_intensities_all[i], color='green', alpha=0.5, label='Target' if i == 0 else "")
+        plt.plot(distances_all[i], mask_intensities_all[i], color=np.random.rand(3), alpha=0.5, label='Mask' if i == 0 else "")
+    plt.axvline(x=0, color='black', linestyle='--', alpha=0.3, linewidth=1)
+    plt.xlabel('Distance from threshold crossing (pixels)', fontsize=12)
+    plt.ylabel('Intensity', fontsize=12)
+    plt.title(f'{image_name} - Mito {mito_id} - Profile {i}', fontsize=14)
+    plt.grid(True, alpha=0.3)
+    plt.legend(fontsize=11)
+    plt.tight_layout()
+    output_file_individual = os.path.join(output_dir, f'{image_name}_mito_{mito_id}_intensity_profile_{i}.png')
+    plt.savefig(output_file_individual, dpi=150, bbox_inches='tight')
+    print(f"Saved individual profile plot to {output_file_individual}")
+    plt.close()
+
+    fig, ax = plt.subplots(figsize=(6, 4))
     if aligned_mito_profiles:
         avg_mito_profile = np.mean(aligned_mito_profiles, axis=0)
         avg_target_profile = np.mean(aligned_target_profiles, axis=0)
-        avg_distances = np.linspace(shifted_distances[0], shifted_distances[-1], 100)
+        # Use the first profile's distance grid as reference for averaging
+        avg_distances = aligned_distances_list[0]
         
         ax.plot(avg_distances, avg_mito_profile, color='blue', linewidth=2, label='Average Mito')
         ax.plot(avg_distances, avg_target_profile, color='green', linewidth=2, label='Average Target')
@@ -236,15 +333,23 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
     }
 
 
-def process_directory(pkl_dir, intensity_threshold=0.3, prominence_threshold=0.1):
+def process_directory(pkl_dir, output_dir=None, intensity_threshold=0.3, prominence_threshold=0.1):
     """
     Process all pickle files in a directory.
     
     Args:
         pkl_dir: Directory containing pickle files
+        output_dir: Directory to save plots and CSV (defaults to pkl_dir)
         intensity_threshold: Minimum intensity threshold for peaks
         prominence_threshold: Minimum prominence threshold for peaks
     """
+    if output_dir is None:
+        output_dir = pkl_dir
+    
+    # Create output directory if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
     pkl_files = glob.glob(os.path.join(pkl_dir, '*_detailed.pkl'))
     
     if not pkl_files:
@@ -260,7 +365,7 @@ def process_directory(pkl_dir, intensity_threshold=0.3, prominence_threshold=0.1
     for pkl_file in pkl_files:
         print(f"\nProcessing {os.path.basename(pkl_file)}...")
         try:
-            result = visualize_intensity_profiles(pkl_file, pkl_dir, intensity_threshold, prominence_threshold)
+            result = visualize_intensity_profiles(pkl_file, output_dir, intensity_threshold, prominence_threshold)
             if result:
                 results.append(result)
         except Exception as e:
@@ -268,7 +373,7 @@ def process_directory(pkl_dir, intensity_threshold=0.3, prominence_threshold=0.1
     
     # Write results to CSV
     if results:
-        csv_file = os.path.join(pkl_dir, 'target_com_values.csv')
+        csv_file = os.path.join(output_dir, 'target_com_values.csv')
         
         with open(csv_file, 'w', newline='') as f:
             fieldnames = ['image_name', 'mito_com', 'target_com', 'mito_com_point', 'target_com_point', 'mito_gaussian_fit_params']
@@ -293,21 +398,22 @@ def process_directory(pkl_dir, intensity_threshold=0.3, prominence_threshold=0.1
 
 
 @click.command()
-@click.option('--directory', type=click.Path(exists=True), required=True, help='Directory containing pickle files')
+@click.option('--input-directory', type=click.Path(exists=True), required=True, help='Directory containing pickle files')
+@click.option('--output-directory', type=click.Path(), default=None, help='Output directory for plots and CSV (defaults to input directory)')
 @click.option('--peak-threshold', type=float, default=0.3, help='Minimum intensity threshold for peaks (default: 0.3)')
 @click.option('--peak-prominence', type=float, default=0.1, help='Minimum prominence threshold for peaks (default: 0.1)')
-def main(directory, peak_threshold, peak_prominence):
+def main(input_directory, output_directory, peak_threshold, peak_prominence):
     """
     Analyze OMM scan pickle files and generate intensity profile plots and CSV reports.
     
     Example:
-        python analyze_omm_scans.py --directory test/ --peak-threshold 0.1 --peak-prominence 0.02
+        python analyze_omm_scans.py --input-directory test/ --output-directory results/ --peak-threshold 0.1 --peak-prominence 0.02
     """
-    if not os.path.exists(directory):
-        print(f"Directory {directory} does not exist")
+    if not os.path.exists(input_directory):
+        print(f"Directory {input_directory} does not exist")
         sys.exit(1)
     
-    process_directory(directory, peak_threshold, peak_prominence)
+    process_directory(input_directory, output_directory, peak_threshold, peak_prominence)
     print("\nDone!")
 
 

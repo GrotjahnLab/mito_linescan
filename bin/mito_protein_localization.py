@@ -97,9 +97,10 @@ network_line_scan:
 
 # Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
 analyze_omm_scans:
-  directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
-  peak_threshold: 0.05  # Minimum intensity threshold for peaks
-  peak_prominence: 0.01  # Minimum prominence threshold for peaks
+  input_directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
+  output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
+  peak_threshold: 0.3  # Minimum intensity threshold for peaks
+  peak_prominence: 0.1  # Minimum prominence threshold for peaks
 """
 
 
@@ -251,17 +252,18 @@ def analyze_omm_scans(ctx, config):
         raise click.ClickException("'analyze_omm_scans' section not found in config.yaml")
     
     analyze_config = config_data['analyze_omm_scans']
-    directory = analyze_config.get('directory')
-    peak_threshold = analyze_config.get('peak_threshold', 0.05)
-    peak_prominence = analyze_config.get('peak_prominence', 0.01)
+    input_directory = analyze_config.get('input_directory')
+    output_directory = analyze_config.get('output_directory')
+    peak_threshold = analyze_config.get('peak_threshold', 0.3)
+    peak_prominence = analyze_config.get('peak_prominence', 0.1)
     
-    if not directory:
-        raise click.ClickException("'directory' parameter required in analyze_omm_scans section")
+    if not input_directory:
+        raise click.ClickException("'input_directory' parameter required in analyze_omm_scans section")
     
-    click.echo(f"Running analyze_omm_scans with config: directory={directory}, peak_threshold={peak_threshold}, peak_prominence={peak_prominence}")
+    click.echo(f"Running analyze_omm_scans with config: input_directory={input_directory}, output_directory={output_directory}, peak_threshold={peak_threshold}, peak_prominence={peak_prominence}")
     
     # Call the analyze_omm_scans function
-    analyze_omm_scans_main(directory, peak_threshold, peak_prominence)
+    analyze_omm_scans_main(input_directory, output_directory, peak_threshold, peak_prominence)
 
 
 def main():

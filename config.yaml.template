@@ -45,6 +45,7 @@ network_line_scan:
 
 # Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
 analyze_omm_scans:
-  directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
-  peak_threshold: 0.05  # Minimum intensity threshold for peaks (0.0-1.0)
-  peak_prominence: 0.01  # Minimum prominence threshold for peaks (0.0-1.0)
+  input_directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
+  output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
+  peak_threshold: 0.3  # Minimum intensity threshold for peaks (0.0-1.0)
+  peak_prominence: 0.1  # Minimum prominence threshold for peaks (0.0-1.0)

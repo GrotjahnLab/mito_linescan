@@ -87,9 +87,10 @@ network_line_scan:
   min_path_length: 30
 
 analyze_omm_scans:
-  directory: '/path/to/pickle/files/'
-  peak_threshold: 0.05
-  peak_prominence: 0.01
+  input_directory: '/path/to/pickle/files/'
+  output_directory: '/path/to/output/'  # Optional, defaults to input directory
+  peak_threshold: 0.3
+  peak_prominence: 0.1
 ```
 
 ## Parameter Details
@@ -133,9 +134,10 @@ analyze_omm_scans:
 - `min_path_length`: Minimum path length to process
 
 ### analyze_omm_scans
-- `directory`: Directory containing pickle files from omm_normal_scan results
-- `peak_threshold`: Minimum intensity threshold for peaks (0.0-1.0, default: 0.05)
-- `peak_prominence`: Minimum prominence threshold for peaks (0.0-1.0, default: 0.01)
+- `input_directory`: Directory containing pickle files from omm_normal_scan results
+- `output_directory`: Output directory for plots and CSV files (optional, defaults to input directory)
+- `peak_threshold`: Minimum intensity threshold for peaks (0.0-1.0, default: 0.3)
+- `peak_prominence`: Minimum prominence threshold for peaks (0.0-1.0, default: 0.1)
 
 ## Individual Scripts
 
