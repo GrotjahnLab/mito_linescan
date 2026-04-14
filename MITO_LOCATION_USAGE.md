@@ -10,6 +10,7 @@
 2. **refine_mask** - Refine mask edges using intensity information  
 3. **omm_normal_scan** - Scan protein on outer mitochondrial membrane using surface normals
 4. **network_line_scan** - Scan protein distribution along mitochondrial network
+5. **analyze_omm_scans** - Analyze intensity profiles from OMM normal scan results
 
 ## Installation
 
@@ -37,6 +38,7 @@ mito_protein_localization --config config.yaml draw_mask
 mito_protein_localization --config config.yaml refine_mask
 mito_protein_localization --config config.yaml omm_normal_scan
 mito_protein_localization --config config.yaml network_line_scan
+mito_protein_localization --config config.yaml analyze_omm_scans
 ```
 
 ## Configuration File Format
@@ -83,6 +85,12 @@ network_line_scan:
   scan_width: 4
   path_sampling: 5
   min_path_length: 30
+
+analyze_omm_scans:
+  input_directory: '/path/to/pickle/files/'
+  output_directory: '/path/to/output/'  # Optional, defaults to input directory
+  peak_threshold: 0.3
+  peak_prominence: 0.1
 ```
 
 ## Parameter Details
@@ -124,6 +132,12 @@ network_line_scan:
 - `scan_width`: Pixels on each side of path for scanning
 - `path_sampling`: Number of subpixel samples along normal
 - `min_path_length`: Minimum path length to process
+
+### analyze_omm_scans
+- `input_directory`: Directory containing pickle files from omm_normal_scan results
+- `output_directory`: Output directory for plots and CSV files (optional, defaults to input directory)
+- `peak_threshold`: Minimum intensity threshold for peaks (0.0-1.0, default: 0.3)
+- `peak_prominence`: Minimum prominence threshold for peaks (0.0-1.0, default: 0.1)
 
 ## Individual Scripts
 

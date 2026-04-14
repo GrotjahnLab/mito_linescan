@@ -16,6 +16,7 @@ from bin.mito_mask import main as mito_mask_main
 from bin.mito_mask_refine import main as mito_mask_refine_main
 from bin.mito_protein_omm_normal_scanner import main as mito_protein_omm_normal_scanner_main
 from bin.mito_protein_line_scanner import main as mito_protein_line_scanner_main
+from bin.analyze_omm_scans import process_directory as analyze_omm_scans_main
 
 
 def load_config(config_file):
@@ -93,6 +94,13 @@ network_line_scan:
   scan_width: 4  # Pixels on each side of the path for scanning
   path_sampling: 5  # Number of subpixel samples along the normal
   min_path_length: 30  # Minimum path length to process
+
+# Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
+analyze_omm_scans:
+  input_directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
+  output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
+  peak_threshold: 0.3  # Minimum intensity threshold for peaks
+  peak_prominence: 0.1  # Minimum prominence threshold for peaks
 """
 
 
@@ -228,6 +236,34 @@ def network_line_scan(ctx, config):
     # Call the original mito_protein_line_scanner main function with args
     sys.argv = ['mito_protein_line_scanner'] + args
     mito_protein_line_scanner_main(standalone_mode=False)
+
+
+@cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
+@click.pass_context
+def analyze_omm_scans(ctx, config):
+    """Analyze intensity profiles from OMM normal scan results (analyze_omm_scans.py)."""
+    config_file = config
+    if not config_file:
+        raise click.ClickException("--config option is required")
+    
+    config_data = load_config(config_file)
+    if 'analyze_omm_scans' not in config_data:
+        raise click.ClickException("'analyze_omm_scans' section not found in config.yaml")
+    
+    analyze_config = config_data['analyze_omm_scans']
+    input_directory = analyze_config.get('input_directory')
+    output_directory = analyze_config.get('output_directory')
+    peak_threshold = analyze_config.get('peak_threshold', 0.3)
+    peak_prominence = analyze_config.get('peak_prominence', 0.1)
+    
+    if not input_directory:
+        raise click.ClickException("'input_directory' parameter required in analyze_omm_scans section")
+    
+    click.echo(f"Running analyze_omm_scans with config: input_directory={input_directory}, output_directory={output_directory}, peak_threshold={peak_threshold}, peak_prominence={peak_prominence}")
+    
+    # Call the analyze_omm_scans function
+    analyze_omm_scans_main(input_directory, output_directory, peak_threshold, peak_prominence)
 
 
 def main():

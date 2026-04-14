@@ -42,3 +42,10 @@ network_line_scan:
   scan_width: 4  # Pixels on each side of the path for scanning
   path_sampling: 5  # Number of subpixel samples along the normal
   min_path_length: 30  # Minimum path length to process
+
+# Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
+analyze_omm_scans:
+  input_directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
+  output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
+  peak_threshold: 0.3  # Minimum intensity threshold for peaks (0.0-1.0)
+  peak_prominence: 0.1  # Minimum prominence threshold for peaks (0.0-1.0)
