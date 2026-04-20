@@ -38,6 +38,9 @@ def draw_mitochondria(mito_image, scan_image):
 
     # initialize the mask so it exists in the enclosing scope
     inside_mask_2d = np.zeros((y_pixels, x_pixels), dtype=bool)
+    
+    # initialize line artist for displaying lasso points
+    lasso_line, = ax_z.plot([], [], 'r-', linewidth=2, label='Lasso path')
 
     # lasso selector for user draw mitochondria region
     def on_select(verts):
@@ -49,6 +52,12 @@ def draw_mitochondria(mito_image, scan_image):
         # Determine which points are inside the lasso path
         inside = lasso_path.contains_points(coords)
         inside_mask_2d = inside.reshape((y_pixels, x_pixels))  # shape (Y, X)
+        
+        # Display the lasso path on the image
+        if len(verts) > 0:
+            verts_array = np.array(verts)
+            lasso_line.set_data(verts_array[:, 0], verts_array[:, 1])
+        
         fig.canvas.draw_idle()
 
     lasso = LassoSelector(ax_z, on_select)

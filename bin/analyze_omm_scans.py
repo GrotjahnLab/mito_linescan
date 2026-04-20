@@ -112,11 +112,15 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
     target_interp_profiles = []
     mask_interp_profiles = []
     
+    # Collect data for valid peaks that pass all criteria
+    valid_peaks_data = []
+    
     for point_data in detailed_data:
         mito_int = np.array(point_data['mito_intensities'])
         target_int = np.array(point_data['scan_intensities'])
         mask_int = np.array(point_data['mask_intensities'])
         distances = np.array(point_data['normal_distances'])
+        normal_line_points = point_data['normal_line_points']
         
         if len(distances) < 2:
             continue
@@ -141,6 +145,14 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         target_interp = smooth_profile(target_interp, window=3)
         mask_interp = smooth_profile(mask_interp, window=3)
         
+        # Find mito peaks
+        mito_peaks, _ = find_peaks(mito_interp)
+        if len(mito_peaks) == 0:
+            continue
+        mito_prominences = peak_prominences(mito_interp, mito_peaks)[0]
+        highest_mito_peak_idx = int(np.argmax(mito_prominences))
+        highest_mito_peak = mito_peaks[highest_mito_peak_idx]
+        
         # Filter based on target profile meeting peak and prominence thresholds
         target_peaks, _ = find_peaks(target_interp)
         if len(target_peaks) == 0:
@@ -149,9 +161,37 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         highest_target_peak_idx = int(np.argmax(target_prominences))
         highest_target_peak = target_peaks[highest_target_peak_idx]
         
-        # Check if highest peak meets thresholds
-        if target_interp[highest_target_peak] < intensity_threshold or target_prominences[highest_target_peak_idx] < prominence_threshold:
+        # Check if both mito and target peaks meet thresholds
+        if (mito_interp[highest_mito_peak] < intensity_threshold or 
+            mito_prominences[highest_mito_peak_idx] < prominence_threshold or
+            target_interp[highest_target_peak] < intensity_threshold or 
+            target_prominences[highest_target_peak_idx] < prominence_threshold):
             continue
+        
+        # Check if mask profile is larger on left side of mito peak (scan done properly)
+        mask_left = mask_interp[:highest_mito_peak]
+        mask_right = mask_interp[highest_mito_peak:]
+        if np.mean(mask_left) <= np.mean(mask_right):
+            continue
+        
+        # All criteria met - collect data for CSV
+        target_peak_distance = distance_grid[highest_target_peak]
+        mito_peak_distance = distance_grid[highest_mito_peak]
+        
+        # Map back to original normal_line_points indices
+        closest_mito_idx = int(np.argmin(np.abs(distances - mito_peak_distance)))
+        closest_target_idx = int(np.argmin(np.abs(distances - target_peak_distance)))
+        
+        mito_peak_image_point = normal_line_points[closest_mito_idx]
+        target_peak_image_point = normal_line_points[closest_target_idx]
+        
+        valid_peaks_data.append({
+            'image_name': image_name,
+            'mito_id': mito_id,
+            'target_peak_distance': target_peak_distance,
+            'mito_peak_image_point': mito_peak_image_point,
+            'target_peak_image_point': target_peak_image_point
+        })
 
         mito_interp_profiles.append(mito_interp)
         target_interp_profiles.append(target_interp)
@@ -162,7 +202,11 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         mito_interp_profiles = np.array(mito_interp_profiles)
         target_interp_profiles = np.array(target_interp_profiles)
         mask_interp_profiles = np.array(mask_interp_profiles)
+
         
+        mito_interp_profiles = mito_interp_profiles / np.max(mito_interp_profiles, axis=1, keepdims=True)
+        target_interp_profiles = target_interp_profiles / np.max(target_interp_profiles, axis=1, keepdims=True)
+        mask_interp_profiles = mask_interp_profiles / np.max(mask_interp_profiles, axis=1, keepdims=True)        
         # Calculate mean and standard deviation
         mito_mean = np.mean(mito_interp_profiles, axis=0)
         mito_std = np.std(mito_interp_profiles, axis=0)
@@ -328,8 +372,8 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         'target_com_values': target_com_values,
         'mito_com_points': mito_com_points,
         'target_com_points': target_com_points,
-        'mito_gaussian_fit_params': mito_gaussian_fit_params
-
+        'mito_gaussian_fit_params': mito_gaussian_fit_params,
+        'valid_peaks_data': valid_peaks_data
     }
 
 
@@ -395,6 +439,30 @@ def process_directory(pkl_dir, output_dir=None, intensity_threshold=0.3, promine
                     writer.writerow(row)
         
         print(f"\nSaved scan data to {csv_file}")
+        
+        # Write valid peaks data to separate CSV
+        valid_peaks_list = []
+        for result in results:
+            if 'valid_peaks_data' in result and result['valid_peaks_data']:
+                valid_peaks_list.extend(result['valid_peaks_data'])
+        
+        if valid_peaks_list:
+            csv_file_peaks = os.path.join(output_dir, 'valid_peaks_data.csv')
+            with open(csv_file_peaks, 'w', newline='') as f:
+                fieldnames = ['image_name', 'mito_id', 'target_peak_distance', 'mito_peak_image_point', 'target_peak_image_point']
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                
+                writer.writeheader()
+                for peak_data in valid_peaks_list:
+                    row = {
+                        'image_name': peak_data['image_name'],
+                        'mito_id': peak_data['mito_id'],
+                        'target_peak_distance': f'{peak_data["target_peak_distance"]:.4f}',
+                        'mito_peak_image_point': str(peak_data['mito_peak_image_point']),
+                        'target_peak_image_point': str(peak_data['target_peak_image_point'])
+                    }
+                    writer.writerow(row)
+            print(f"Saved {len(valid_peaks_list)} valid peaks to {csv_file_peaks}")
 
 
 @click.command()
