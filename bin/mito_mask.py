@@ -62,6 +62,15 @@ def draw_mitochondria(mito_image, scan_image):
 
     lasso = LassoSelector(ax_z, on_select)
     lasso.set_active(True)
+    
+    # Clear lasso line when user starts drawing a new path
+    def on_press(event):
+        if event.inaxes == ax_z:
+            lasso_line.set_data([], [])
+            fig.canvas.draw_idle()
+    
+    fig.canvas.mpl_connect('button_press_event', on_press)
+    
     #add a botton to switch mito and scan channels if necessary
     switch_channels = False
     def toggle_channels(event):
