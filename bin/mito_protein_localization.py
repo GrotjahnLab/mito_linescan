@@ -17,6 +17,7 @@ from bin.mito_mask_refine import main as mito_mask_refine_main
 from bin.mito_protein_omm_normal_scanner import main as mito_protein_omm_normal_scanner_main
 from bin.mito_protein_line_scanner import main as mito_protein_line_scanner_main
 from bin.analyze_omm_scans import process_directory as analyze_omm_scans_main
+from bin.plot_peak_distance_analysis import main as plot_peak_distance_analysis_main
 
 
 def load_config(config_file):
@@ -34,6 +35,10 @@ def config_to_args(config_dict):
     """Convert config dictionary to click command line arguments."""
     args = []
     for key, value in config_dict.items():
+        # Skip None values (from null in YAML)
+        if value is None:
+            continue
+        
         # Convert underscores to hyphens for click options
         key = key.replace('_', '-')
         
@@ -61,6 +66,7 @@ draw_mask:
   target_channel: 1  # Channel index for target/scan signal (0-based)
   scan_width: 7  # Width of scan lines in pixels
   sampling_radius: 3  # Radius for weighted average sampling in pixels
+  outliers_csv: ''  # Path to outliers CSV from plot_peak_distance_analysis (optional, only process outlier images)
 
 # Mask refine: Refine mask edges using intensity information
 refine_mask:
@@ -101,6 +107,20 @@ analyze_omm_scans:
   output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
   peak_threshold: 0.3  # Minimum intensity threshold for peaks
   peak_prominence: 0.1  # Minimum prominence threshold for peaks
+
+# Plot peak distance analysis: Create box and violin plots of peak distance differences
+plot_peak_distance_analysis:
+  csv_file: '/path/to/scan_data.csv'  # Path to scan_data.csv file from OMM analysis
+  output_directory: '/path/to/output/'  # Output directory for plots and outliers CSV (optional, defaults to same as CSV)
+  group_by_chars: 5  # Number of starting characters of image_name to use for grouping
+  min_mito_intensity: 0.3  # Minimum mito peak intensity threshold
+  max_mito_intensity: null  # Maximum mito peak intensity threshold (null = no limit)
+  min_target_intensity: 0.2  # Minimum target peak intensity threshold
+  max_target_intensity: null  # Maximum target peak intensity threshold (null = no limit)
+  min_mito_prominence: 0.08  # Minimum mito peak prominence threshold
+  max_mito_prominence: null  # Maximum mito peak prominence threshold (null = no limit)
+  min_target_prominence: 0.05  # Minimum target peak prominence threshold
+  max_target_prominence: null  # Maximum target peak prominence threshold (null = no limit)
 """
 
 
@@ -264,6 +284,29 @@ def analyze_omm_scans(ctx, config):
     
     # Call the analyze_omm_scans function
     analyze_omm_scans_main(input_directory, output_directory, peak_threshold, peak_prominence)
+
+
+@cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
+@click.pass_context
+def plot_peak_distance_analysis(ctx, config):
+    """Plot peak distance analysis with outlier detection (plot_peak_distance_analysis.py)."""
+    config_file = config
+    if not config_file:
+        raise click.ClickException("--config option is required")
+    
+    config_data = load_config(config_file)
+    if 'plot_peak_distance_analysis' not in config_data:
+        raise click.ClickException("'plot_peak_distance_analysis' section not found in config.yaml")
+    
+    plot_config = config_data['plot_peak_distance_analysis']
+    args = config_to_args(plot_config)
+    
+    click.echo(f"Running plot_peak_distance_analysis with config: {plot_config}")
+    
+    # Call the plot_peak_distance_analysis main function with args
+    sys.argv = ['plot_peak_distance_analysis'] + args
+    plot_peak_distance_analysis_main(standalone_mode=False)
 
 
 def main():

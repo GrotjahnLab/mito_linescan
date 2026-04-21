@@ -100,7 +100,8 @@ def draw_mitochondria(mito_image, scan_image):
 @click.option('--target-channel', default=1, help='Channel index for mask (0-based)', required=False)
 @click.option('--scan-width', default=7, help='Width of scan lines in pixels', required=False)
 @click.option('--sampling-radius', default=3, help='Radius for weighted average sampling in pixels', required=False)
-def main(input_directory, manual_mask_directory, target_channel, mito_channel, scan_width=5, sampling_radius=3):
+@click.option('--outliers-csv', default='', help='Path to outliers CSV file from plot_peak_distance_analysis (optional, only process outlier images)', required=False)
+def main(input_directory, manual_mask_directory, target_channel, mito_channel, scan_width=5, sampling_radius=3, outliers_csv=''):
     input_image_dir = input_directory
     
     #if manual_mask_directory is not provided, save the output in the same input directory
@@ -113,6 +114,42 @@ def main(input_directory, manual_mask_directory, target_channel, mito_channel, s
     if not image_list:
         print(f"No TIFF files found in directory: {input_image_dir}")
         return
+    
+    # If outliers CSV is provided, filter to only process outlier images
+    if outliers_csv and os.path.exists(outliers_csv):
+        print(f"Loading outliers from: {outliers_csv}")
+        outliers_df = pd.read_csv(outliers_csv)
+        outlier_image_names = set(outliers_df['image_name'].unique())
+        print(f"Found {len(outlier_image_names)} unique outlier images")
+        
+        # Filter image list to only include outlier images
+        # Match by comparing the base filename (without extension) to outlier image names
+        original_count = len(image_list)
+        filtered_images = []
+        for tiff_file in image_list:
+            # Get base filename without extension
+            base_name = os.path.splitext(tiff_file)[0]
+            # Remove _mito_mask suffix if present
+            if base_name.endswith('_mito_mask'):
+                base_name = base_name[:-len('_mito_mask')]
+            
+            # Check if this matches any outlier image name (partial match allowed)
+            for outlier_name in outlier_image_names:
+                if outlier_name in base_name or base_name in outlier_name:
+                    filtered_images.append(tiff_file)
+                    break
+        
+        image_list = filtered_images
+        print(f"Processing {len(image_list)} of {original_count} images (outliers only)")
+        print(f"Outlier images: {outlier_image_names}")
+        if not image_list:
+            print("No matching outlier images found in the input directory")
+            return
+    
+    # Initialize state for apply-all options
+    overwrite_all = False
+    skip_all = False
+    
     for input_image in image_list:
         
         basename = os.path.basename(input_image)
@@ -122,16 +159,34 @@ def main(input_directory, manual_mask_directory, target_channel, mito_channel, s
         #if the output file already exists, prompt the user to overwrite or skip
         response = 'y'  # default to overwrite
         if os.path.exists(output_image_path):
-            while True:                    
-                    response = input(f"Invalid response. Output file already exists: {output_image_path}. Overwrite? (y/n): ")
+            # Check if user already selected apply-all options
+            if overwrite_all:
+                response = 'y'
+                print(f"Overwriting (overwrite all)... {output_image_path}")
+            elif skip_all:
+                response = 'n'
+                print(f"Skipping (skip all)... {output_image_path}")
+            else:
+                while True:                    
+                    response = input(f"Output file already exists: {output_image_path}\n(y/n/a=overwrite all/s=skip all): ")
                     if response.lower() == 'n':
                         print("Skipping...")
                         break
                     elif response.lower() == 'y':
                         print("Overwriting...")
                         break
+                    elif response.lower() == 'a':
+                        overwrite_all = True
+                        response = 'y'
+                        print("Overwriting... (overwrite all mode enabled)")
+                        break
+                    elif response.lower() == 's':
+                        skip_all = True
+                        response = 'n'
+                        print("Skipping... (skip all mode enabled)")
+                        break
                     else:
-                        print("Invalid response. Please enter 'y' or 'n'.")
+                        print("Invalid response. Please enter 'y', 'n', 'a' (overwrite all), or 's' (skip all).")
         
         if response.lower() == 'n':
             continue
