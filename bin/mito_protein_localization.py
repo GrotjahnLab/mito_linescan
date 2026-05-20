@@ -134,27 +134,6 @@ plot_peak_distance_analysis:
 """
 
 
-def create_config_file(output_file):
-    """Create a template config file at the specified output path.
-    
-    Args:
-        output_file: Path where the config template file should be written
-        
-    Returns:
-        str: Path to the created config file
-    """
-    output_path = Path(output_file)
-    
-    # Create parent directories if they don't exist
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Write the template to the file
-    with open(output_path, 'w') as f:
-        f.write(CONFIG_TEMPLATE)
-    
-    return str(output_path)
-
-
 @click.group()
 @click.option('--config', type=click.Path(exists=True), help='Path to config.yaml file')
 @click.pass_context
@@ -164,16 +143,39 @@ def cli(ctx, config):
     ctx.obj['config'] = config
 
 
-@cli.command()
-@click.option('--output', type=click.Path(), required=True, help='Output path for config file')
-def create_config(output):
-    """Create a template config file."""
-    try:
-        config_path = create_config_file(output)
-        click.echo(f"✓ Config template created at: {config_path}")
-        click.echo("Edit this file with your directory paths and parameters, then use it with other commands")
-    except Exception as e:
-        raise click.ClickException(f"Failed to create config file: {e}")
+@cli.command(name='create-config')
+@click.option('--output', '-o', type=click.Path(), default='config.yaml',
+              show_default=True,
+              help='Where to write the default config file.')
+@click.option('--force/--no-force', default=False,
+              help='Overwrite the output file if it already exists.')
+def create_config(output, force):
+    """Create a default config file (a copy of config.yaml.template).
+
+    Looks for config.yaml.template alongside the installed package first; if
+    that's not found (e.g. running from a pip-installed wheel without the
+    source tree), falls back to the embedded CONFIG_TEMPLATE string. Refuses
+    to clobber an existing output file unless --force is passed.
+    """
+    template_path = Path(__file__).resolve().parent.parent / 'config.yaml.template'
+    if template_path.exists():
+        content = template_path.read_text()
+        source = str(template_path)
+    else:
+        content = CONFIG_TEMPLATE
+        source = 'embedded CONFIG_TEMPLATE (config.yaml.template not found on disk)'
+
+    out_path = Path(output)
+    if out_path.exists() and not force:
+        raise click.ClickException(
+            f"{out_path} already exists. Pass --force to overwrite."
+        )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(content)
+    click.echo(f"✓ Wrote default config to {out_path}")
+    click.echo(f"  (source: {source})")
+    click.echo("Edit this file with your directory paths and parameters, "
+               "then pass it to the workflow commands via --config.")
 
 
 @cli.command()

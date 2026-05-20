@@ -966,7 +966,22 @@ def process_images(
     click.echo(f"Found {len(image_list)} images to process")
     
     for image in tqdm.tqdm(image_list):
-        basename = os.path.basename(image).split('.')[0]
+        # Strip only the real TIFF (and optional .ome) extension. Filenames
+        # like "20250924_SV40mef_0.1PFA_..._52.1494_decon_NaN.ome.tif" contain
+        # dots inside the name; a naive split('.')[0] collapses different
+        # files to the same prefix and causes them to overwrite each other.
+        raw_name = os.path.basename(image)
+        name_lower = raw_name.lower()
+        if name_lower.endswith('.ome.tif'):
+            basename = raw_name[:-len('.ome.tif')]
+        elif name_lower.endswith('.ome.tiff'):
+            basename = raw_name[:-len('.ome.tiff')]
+        elif name_lower.endswith('.tiff'):
+            basename = raw_name[:-len('.tiff')]
+        elif name_lower.endswith('.tif'):
+            basename = raw_name[:-len('.tif')]
+        else:
+            basename = os.path.splitext(raw_name)[0]
         output_dir = os.path.join(input_dir, basename + run_name)
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)

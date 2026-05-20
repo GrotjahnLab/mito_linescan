@@ -9,7 +9,7 @@ Analyze mitochondrial networks and protein distribution in fluorescence microsco
 - **Interactive Mask Drawing**: GUI-based tool for manually creating mitochondrial masks
 - **Mask Refinement**: Refine mask edges using intensity information for improved accuracy
 - **Outer Mitochondrial Membrane (OMM) Scanning**: Specialized scanning along the outer membrane using surface normals
-- **Network Line Scanning**: Protein intensity profiling along mitochondrial network paths
+- **Network Line Scanning**: Protein intensity profiling along mitochondrial network paths, built on a ridge-filter mask pipeline with an interactive tuning GUI and an optional local-thickness post-skeletonization filter
 - **Peak Detection & Analysis**: Identifies and analyzes peaks in protein distribution
 - **Configuration-Driven**: Use YAML config files for reproducible, batch processing workflows
 - **Batch Processing**: Process multiple TIFF images with consistent parameters
@@ -46,6 +46,7 @@ micromamba env create -f environment.yml
 This creates a conda environment named `mito_protein_scanner` with all required dependencies:
 - numpy, scipy, matplotlib, pandas, scikit-image, networkx
 - click (for CLI), tifffile (TIFF I/O), sknw (skeleton network building), tqdm (progress bars)
+- localthickness (optional local-thickness filter in `network_line_scan`)
 
 ### 3. Activate Environment
 
@@ -59,13 +60,24 @@ The recommended way to use this tool is through the YAML configuration file, whi
 
 ### 1. Set Up Config File
 
-Copy the template and edit with your parameters:
+Generate a default `config.yaml` with the bundled `create-config` command:
+
+```bash
+mito_protein_localization create-config                 # writes ./config.yaml
+mito_protein_localization create-config --output ./my_config.yaml
+mito_protein_localization create-config --force         # overwrite an existing file
+```
+
+`create-config` copies `config.yaml.template` byte-for-byte and refuses to
+clobber an existing file unless `--force` is passed. If you prefer to do it
+by hand, you can still:
 
 ```bash
 cp config.yaml.template config.yaml
 ```
 
-Edit `config.yaml` and configure the workflows you want to use. Each workflow section contains the parameters for that analysis.
+Either way, edit `config.yaml` and configure the workflows you want to use.
+Each workflow section contains the parameters for that analysis.
 
 ### 2. Available Workflows
 
@@ -110,7 +122,12 @@ omm_normal_scan:
 ```
 
 #### **network_line_scan** - Mitochondrial Network Analysis
-Scan protein distribution along the mitochondrial network with optional interactive GUI for threshold selection.
+Scan protein distribution along the mitochondrial network. The binary mask is
+built by a multi-scale ridge-filter pipeline (white top-hat → Meijering ridge
+filter → Otsu) and can be tuned either through an interactive GUI or via
+config/CLI parameters for batch processing. An optional local-thickness filter
+prunes the skeleton after skeletonization so it does not perturb the network
+topology.
 
 ```yaml
 network_line_scan:
@@ -121,11 +138,58 @@ network_line_scan:
   run_name: 'run1'                         # Run name suffix for outputs
   mito_channel: 0                          # Mitochondria channel
   protein_channel: 2                       # Protein channel
-  use_gui: true                            # Interactive threshold selection
+  use_gui: true                            # Interactive mask GUI on/off
   scan_width: 4                            # Pixels on each side of path
   path_sampling: 5                         # Subpixel samples along normal
   min_path_length: 30                      # Minimum path length to process
+  # --- Ridge-filter mask pipeline (also live-tunable in the GUI) ---
+  tubule_radius: 2.0                       # Tubule radius (px); drives
+                                           # top-hat disk + ridge sigmas
+  sensitivity: 1.0                         # Multiplier on Otsu cut of ridge
+                                           # response (1.0=Otsu, <1=more
+                                           # permissive, >1=stricter)
+  min_object_size: 30                      # Drop small CCs (px)
+  gap_closing: 1                           # Binary-closing disk radius (px)
+                                           # to bridge 1-2 px breaks
+  # --- Local-thickness filter (applied AFTER skeletonization) ---
+  use_thickness_filter: false              # Toggle local-thickness filtering
+  min_thickness: 1.0                       # Keep skeleton px with thickness >=
+  max_thickness: 20.0                      # Keep skeleton px with thickness <=
 ```
+
+##### Interactive mask GUI
+
+When `use_gui: true`, an interactive figure opens with live overlays and
+controls:
+
+- **Tubule radius (px)** — sets the structural scale of the ridge filter
+  (top-hat disk and Meijering sigmas). Recomputation is slow, so it updates
+  only when you press the **Recompute ridge** button. For ~0.17 µm/px decon
+  data with ~0.3–0.6 µm mito tubules, ~2 px is a good starting point.
+- **Sensitivity** — multiplier on the Otsu cut of the ridge response.
+  `1.0` = pure Otsu; `<1` catches dim tubules; `>1` is stricter.
+- **Min size (px)** — drops binary connected components smaller than this.
+- **Gap closing (px)** — binary-closing disk radius to bridge small breaks
+  before skeletonization.
+- **Min / Max thickness (px)** — together define the allowed local-thickness
+  range. When `Filter ON` is checked, skeleton pixels whose underlying local
+  thickness is outside `[min, max]` are dropped from the returned skeleton.
+  Crucially, this exclusion is applied **after** `skeletonize`, so the
+  topology of the network is determined by the full binary; thickness only
+  removes pixels from the final skeleton and rebuilds the network graph.
+
+The view toggles (Binary / Skeleton / Nodes / Ridge / Excluded / Filter ON)
+let you overlay any combination of intermediates, and a stats line below the
+figure reports binary %, skeleton pixels (filtered), nodes/edges, paths
+≥ min_path_length, current threshold, and thickness distribution.
+
+##### Local-thickness dependency
+
+The optional thickness filter uses the
+[`localthickness`](https://pypi.org/project/localthickness/) package, which is
+installed as part of `environment.yml`. If the package is missing for any
+reason, the filter is silently disabled (a warning is printed) and the
+pipeline falls back to the un-filtered skeleton.
 
 #### **analyze_omm_scans** - Peak Analysis
 Analyze intensity profiles and detect peaks from OMM scanning results.
