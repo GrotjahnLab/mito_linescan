@@ -207,6 +207,7 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
                            min_target_intensity=None, max_target_intensity=None,
                            min_mito_prominence=None, max_mito_prominence=None,
                            min_target_prominence=None, max_target_prominence=None,
+                           bin_width=1.0, max_abs_distance=0.0,
                            recursive=False):
     """
     Build the mito-vs-protein peak-distance dataframe from a directory of
@@ -297,47 +298,43 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
     else:
         print("\nNo outliers detected.")
 
-    
-    # Create figure with box plot and violin plot side by side
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    groups = sorted(df['group'].unique())
-    data_to_plot = [df[df['group'] == group]['peak_distance_diff'].values for group in groups]
-    
-    # Left plot: Box plot
-    bp = ax1.boxplot(data_to_plot, tick_labels=groups, patch_artist=True)
-    for patch in bp['boxes']:
-        patch.set_facecolor('lightblue')
-        patch.set_alpha(0.7)
-    ax1.axhline(y=0, color='red', linestyle='--', linewidth=2, label='OMM')
-    ax1.set_xlabel('Image Group (First 5 characters)', fontsize=12)
-    ax1.set_ylabel('Peak Distance Difference (pixels)', fontsize=12)
-    ax1.set_title('Box Plot', fontsize=12)
-    ax1.grid(True, alpha=0.3, axis='y')
-    ax1.legend(fontsize=11)
-    
-    # Right plot: Violin plot
-    parts = ax2.violinplot(data_to_plot, positions=range(len(groups)), showmeans=True, showmedians=True)
-    for pc in parts['bodies']:
-        pc.set_facecolor('lightblue')
-        pc.set_alpha(0.7)
-    ax2.axhline(y=0, color='red', linestyle='--', linewidth=2, label='OMM')
-    ax2.set_xticks(range(len(groups)))
-    ax2.set_xticklabels(groups)
-    ax2.set_xlabel('Image Group (First 5 characters)', fontsize=12)
-    ax2.set_ylabel('Peak Distance Difference (pixels)', fontsize=12)
-    ax2.set_title('Violin Plot', fontsize=12)
-    ax2.grid(True, alpha=0.3, axis='y')
-    ax2.legend(fontsize=11)
-    
-    plt.suptitle('Distribution of (Mito Peak Distance - Target Peak Distance) by Image Group', fontsize=14, y=1.02)
-    plt.tight_layout()
-    
-    # Save the plot
-    output_file = os.path.join(output_dir, 'peak_distance_difference_whisker_plot.png')
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
-    print(f"\nSaved box plot and violin plot to {output_file}")
-    plt.close()
+
+    # Histogram of (mito_peak_distance - target_peak_distance), pooled across
+    # all paired peaks. Median + mean overlaid. The x-axis cap defaults to the
+    # data's p99 unless caller pinned it via `max_abs_distance`.
+    vals = df['peak_distance_diff'].to_numpy(dtype=float)
+    if max_abs_distance and max_abs_distance > 0:
+        upper = float(max_abs_distance)
+    else:
+        upper = float(np.percentile(np.abs(vals), 99))
+    upper = max(upper, float(bin_width))
+    bins = np.arange(-upper, upper + bin_width, bin_width)
+
+    clipped = vals[(vals >= -upper) & (vals <= upper)]
+    n_clipped = vals.size - clipped.size
+
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    ax.hist(clipped, bins=bins, edgecolor='black', alpha=0.85)
+    ax.axvline(0, color='red', linestyle='--', linewidth=1.5,
+               label='mito = target (offset 0)')
+    ax.axvline(float(np.median(vals)), color='orange', linestyle=':',
+               linewidth=1.5, label=f'median = {np.median(vals):.2f}')
+    ax.axvline(float(vals.mean()), color='green', linestyle=':',
+               linewidth=1.5, label=f'mean = {vals.mean():.2f}')
+    ax.set_xlabel('Mito peak distance - Target peak distance (px)')
+    ax.set_ylabel('Count')
+    title = (f'Mito vs target peak offset  (n={vals.size} paired peaks from '
+             f"{df['mito_id'].nunique()} tracks, {df['image_name'].nunique()} images)")
+    if n_clipped:
+        title += f'  ·  {n_clipped} values |x| > {upper:.1f} not shown'
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    output_file = os.path.join(output_dir, 'peak_distance_histogram.png')
+    fig.savefig(output_file, dpi=150)
+    plt.close(fig)
+    print(f"\nSaved histogram to {output_file}")
 
 
 @click.command()
@@ -369,6 +366,10 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
               help='Minimum target peak prominence (filter during ingestion).')
 @click.option('--max-target-prominence', type=float, default=None,
               help='Maximum target peak prominence (post-pair filter).')
+@click.option('--bin-width', type=float, default=1.0, show_default=True,
+              help='Histogram bin width (px).')
+@click.option('--max-abs-distance', type=float, default=0.0, show_default=True,
+              help='Histogram x-axis cap |x| <= this. 0 = auto from data (p99).')
 @click.option('--recursive/--no-recursive', default=False,
               help='Recurse into subdirectories of --csv-directory.')
 def main(csv_directory, input_pattern, output_directory, group_by_chars,
@@ -376,6 +377,7 @@ def main(csv_directory, input_pattern, output_directory, group_by_chars,
          min_target_intensity, max_target_intensity,
          min_mito_prominence, max_mito_prominence,
          min_target_prominence, max_target_prominence,
+         bin_width, max_abs_distance,
          recursive):
     """
     Plot the offset between mitochondria peaks and protein/target peaks along
@@ -400,6 +402,8 @@ def main(csv_directory, input_pattern, output_directory, group_by_chars,
         max_mito_prominence=max_mito_prominence,
         min_target_prominence=min_target_prominence,
         max_target_prominence=max_target_prominence,
+        bin_width=bin_width,
+        max_abs_distance=max_abs_distance,
         recursive=recursive,
     )
     print("\nDone!")

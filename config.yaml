@@ -94,4 +94,6 @@ plot_peak_distance_analysis:
   max_mito_prominence: null
   min_target_prominence: 0.05
   max_target_prominence: null
+  bin_width: 1.0
+  max_abs_distance: 0.0
   recursive: false
