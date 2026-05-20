@@ -90,7 +90,8 @@ def lasso_select_cell(image):
     vmin0 = float(np.percentile(image, 1))
     vmax0 = float(np.percentile(image, 99))
     im = ax.imshow(image, cmap='gray', vmin=vmin0, vmax=vmax0)
-    ax.set_title('Lasso to select region. Adjust contrast with sliders below.')
+    ax.set_title('Lasso to select a cell region (optional). '
+                 'Close the window without drawing to use the whole image.')
 
     # Slider axes (normalized figure coords)
     axcolor = 'lightgoldenrodyellow'
@@ -113,20 +114,32 @@ def lasso_select_cell(image):
     pmax.on_changed(update)
 
     mask = np.zeros(image.shape, dtype=bool)
+    drew_lasso = False  # set True only when the user actually drew something
 
     def onselect(verts):
         path = Path(verts)
         y, x = np.mgrid[:image.shape[0], :image.shape[1]]
         points = np.vstack((x.flatten(), y.flatten())).T
         mask_flat = path.contains_points(points)
-        nonlocal mask
+        nonlocal mask, drew_lasso
         mask = mask_flat.reshape(image.shape)
+        drew_lasso = True
         # keep figure open until user closes it
 
     lasso = LassoSelector(ax, onselect)
 
     plt.show()
-    print(mask.astype(int))
+
+    # If the user closed the window without drawing a lasso path (or drew an
+    # empty/degenerate one), fall back to "use the whole image" instead of the
+    # all-False initial mask. The previous behaviour silently zeroed out the
+    # entire image downstream, which made the rest of the pipeline useless.
+    if not drew_lasso or not mask.any():
+        print("No lasso drawn -- using the entire image as the cell ROI.")
+        mask = np.ones(image.shape, dtype=bool)
+    else:
+        print(f"Lasso ROI: {int(mask.sum()):,} px "
+              f"({100 * mask.mean():.1f}% of image)")
     return mask
 
 

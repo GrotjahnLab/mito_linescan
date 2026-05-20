@@ -52,7 +52,7 @@ network_line_scan:
   min_thickness: 1.0  # Min local thickness to keep (px)
   max_thickness: 20.0  # Max local thickness to keep (px)
   # --- Final binary mask export ---
-  binary_mask_dir_output: ''  # If set, write the final (thickness-filtered)
+  binary_mask_dir_output: '../examples/'  # If set, write the final (thickness-filtered)
                               # mito binary mask as
                               # {basename}_mito_binary.tif (uint8 0/255) into
                               # this directory. Empty = skip saving.
