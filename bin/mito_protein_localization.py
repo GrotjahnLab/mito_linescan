@@ -11,13 +11,13 @@ import click
 import yaml
 from pathlib import Path
 
-# Import the main functions from individual modules
-from bin.mito_mask import main as mito_mask_main
-from bin.mito_mask_refine import main as mito_mask_refine_main
-from bin.mito_protein_omm_normal_scanner import main as mito_protein_omm_normal_scanner_main
-from bin.mito_protein_line_scanner import main as mito_protein_line_scanner_main
-from bin.analyze_omm_scans import process_directory as analyze_omm_scans_main
-from bin.plot_peak_distance_analysis import main as plot_peak_distance_analysis_main
+# NOTE: the workflow modules (bin.mito_mask, bin.mito_protein_line_scanner, ...)
+# pull in the full scientific stack (numpy, scipy, scikit-image, matplotlib,
+# sknw, pandas, tifffile, networkx, ...). Importing them at module load adds
+# multiple seconds of startup cost to *every* invocation of this CLI, including
+# `--help`. To keep the dispatcher snappy, each workflow is imported lazily
+# inside its own click command, so only the workflow you actually run pays
+# the import cost.
 
 
 def load_config(config_file):
@@ -195,7 +195,10 @@ def draw_mask(ctx, config):
     args = config_to_args(draw_mask_config)
     
     click.echo(f"Running draw_mask with config: {draw_mask_config}")
-    
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.mito_mask import main as mito_mask_main
+
     # Call the original mito_mask main function with args
     sys.argv = ['mito_mask'] + args
     mito_mask_main(standalone_mode=False)
@@ -218,7 +221,10 @@ def refine_mask(ctx, config):
     args = config_to_args(refine_mask_config)
     
     click.echo(f"Running refine_mask with config: {refine_mask_config}")
-    
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.mito_mask_refine import main as mito_mask_refine_main
+
     # Call the original mito_mask_refine main function with args
     sys.argv = ['mito_mask_refine'] + args
     mito_mask_refine_main(standalone_mode=False)
@@ -241,7 +247,10 @@ def omm_normal_scan(ctx, config):
     args = config_to_args(omm_normal_scan_config)
     
     click.echo(f"Running omm_normal_scan with config: {omm_normal_scan_config}")
-    
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.mito_protein_omm_normal_scanner import main as mito_protein_omm_normal_scanner_main
+
     # Call the original mito_protein_omm_normal_scanner main function with args
     sys.argv = ['mito_protein_omm_normal_scanner'] + args
     mito_protein_omm_normal_scanner_main(standalone_mode=False)
@@ -264,7 +273,10 @@ def network_line_scan(ctx, config):
     args = config_to_args(network_line_scan_config)
     
     click.echo(f"Running network_line_scan with config: {network_line_scan_config}")
-    
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.mito_protein_line_scanner import main as mito_protein_line_scanner_main
+
     # Call the original mito_protein_line_scanner main function with args
     sys.argv = ['mito_protein_line_scanner'] + args
     mito_protein_line_scanner_main(standalone_mode=False)
@@ -293,7 +305,10 @@ def analyze_omm_scans(ctx, config):
         raise click.ClickException("'input_directory' parameter required in analyze_omm_scans section")
     
     click.echo(f"Running analyze_omm_scans with config: input_directory={input_directory}, output_directory={output_directory}, peak_threshold={peak_threshold}, peak_prominence={peak_prominence}")
-    
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.analyze_omm_scans import process_directory as analyze_omm_scans_main
+
     # Call the analyze_omm_scans function
     analyze_omm_scans_main(input_directory, output_directory, peak_threshold, peak_prominence)
 
@@ -315,7 +330,10 @@ def plot_peak_distance_analysis(ctx, config):
     args = config_to_args(plot_config)
     
     click.echo(f"Running plot_peak_distance_analysis with config: {plot_config}")
-    
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.plot_peak_distance_analysis import main as plot_peak_distance_analysis_main
+
     # Call the plot_peak_distance_analysis main function with args
     sys.argv = ['plot_peak_distance_analysis'] + args
     plot_peak_distance_analysis_main(standalone_mode=False)
