@@ -96,10 +96,20 @@ network_line_scan:
   run_name: 'run1'  # Run name suffix for output directories
   mito_channel: 0  # 0-based index for mitochondria channel
   protein_channel: 2  # 0-based index for protein channel
-  use_gui: true  # Use interactive GUI for threshold selection
+  use_gui: true  # Use interactive GUI for mask selection
   scan_width: 4  # Pixels on each side of the path for scanning
   path_sampling: 5  # Number of subpixel samples along the normal
   min_path_length: 30  # Minimum path length to process
+  # --- Ridge-filter mask pipeline (also live-tunable in the GUI) ---
+  tubule_radius: 2.0  # Mito tubule radius in px (drives top-hat + ridge sigmas)
+  sensitivity: 1.0  # Multiplier on Otsu cut of ridge response (1.0=Otsu)
+  min_object_size: 30  # Drop binary connected components smaller than this (px)
+  gap_closing: 1  # Binary closing disk radius (px) to bridge small breaks
+  # --- Local-thickness filter (applied AFTER skeletonization, requires
+  #     the `localthickness` PyPI package) ---
+  use_thickness_filter: false  # Filter skeleton by local thickness range
+  min_thickness: 1.0  # Min local thickness to keep (px)
+  max_thickness: 20.0  # Max local thickness to keep (px)
 
 # Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
 analyze_omm_scans:

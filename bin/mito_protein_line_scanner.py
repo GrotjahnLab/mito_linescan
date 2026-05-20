@@ -324,6 +324,610 @@ def binary_to_sknw(binary_image):
     return mito_skeleton, mito_nx
 
 
+def _local_thickness_2d(binary):
+    """
+    Compute a 2D local thickness map (in pixel units) on a binary array
+    using the `localthickness` PyPI package. Returns None if the package is
+    not installed or the call fails — callers should handle that gracefully.
+
+    Reference: https://pypi.org/project/localthickness/
+    """
+    try:
+        import localthickness as lt  # noqa: F401
+    except ImportError as exc:
+        print(f"  [thickness] localthickness not installed ({exc}); "
+              "skipping. Add `localthickness` to your conda env.")
+        return None
+
+    bn = np.ascontiguousarray(binary.astype(np.uint8))
+    # Defensive: the package historically exposes `local_thickness` but a few
+    # versions used `local_thickness_2d`. Try both.
+    try:
+        thk = lt.local_thickness(bn)
+    except AttributeError:
+        try:
+            thk = lt.local_thickness_2d(bn)
+        except Exception as exc:
+            print(f"  [thickness] localthickness API mismatch: {exc}")
+            return None
+    except Exception as exc:
+        print(f"  [thickness] localthickness call failed: {exc}")
+        return None
+
+    thk = np.asarray(thk, dtype=np.float32)
+    if thk.shape != bn.shape:
+        print(f"  [thickness] unexpected shape {thk.shape} vs {bn.shape}; "
+              "skipping.")
+        return None
+    return thk
+
+
+def select_mask_gui(
+    image,
+    *,
+    tubule_radius=2.0,
+    sensitivity=1.0,
+    min_object_size=30,
+    gap_closing=1,
+    use_thickness_filter=False,
+    min_thickness=1.0,
+    max_thickness=20.0,
+):
+    """
+    Interactive ridge-filter pipeline for selecting a mitochondrial binary
+    mask + skeleton + network graph. Returns the same 4-tuple shape as
+    select_threshold_gui so the rest of the pipeline is unchanged:
+
+        (threshold_value, mito_binary, mito_skeleton, mito_nx)
+
+    Controls (top to bottom):
+      - Tubule radius (px)     : sets the structural scale of the ridge filter
+                                 and the white-top-hat disk. Slow to recompute,
+                                 so it only updates when you press "Recompute
+                                 ridge". For ~0.17 um/px decon data with ~0.3
+                                 -0.6 um mito tubules, ~2 px is right.
+      - Sensitivity            : multiplier on the Otsu threshold of the ridge
+                                 response. 1.0 = pure Otsu, <1 = more permissive
+                                 (catches dim tubules), >1 = stricter.
+      - Min size (px)          : drops connected components smaller than this,
+                                 i.e. speckle / debris.
+      - Gap closing (px)       : disk radius for binary closing to bridge 1-2 px
+                                 breaks in tubules before skeletonization.
+      - Min / Max thickness    : a *local thickness* map (computed on the
+                                 binary mask via the `localthickness` PyPI
+                                 package) is used to flag regions outside the
+                                 [min, max] range. Critically, this exclusion
+                                 is applied AFTER skeletonization so it does
+                                 not introduce artefacts into the skeleton
+                                 topology; we just drop skeleton pixels whose
+                                 underlying local thickness is out of range
+                                 and rebuild the network graph from the
+                                 filtered skeleton.
+
+    View toggles let you overlay: the binary mask, the full skeleton, the
+    network nodes, the raw ridge response, and the excluded-by-thickness
+    regions. Stats below the figure summarise the current mask.
+
+    All defaults above can be supplied by the caller (CLI / config) so that
+    the GUI opens at the user's preferred starting point.
+    """
+    from matplotlib.widgets import Slider, Button, CheckButtons
+    from skimage.filters import meijering, threshold_otsu
+    from skimage.morphology import (
+        white_tophat, disk, remove_small_objects, remove_small_holes,
+        binary_closing, skeletonize as _skel,
+    )
+
+    img = np.asarray(image, dtype=np.float32)
+    # Normalize to 0..1 for filter stability (top-hat / Meijering both like
+    # a well-behaved input range). We don't change the upstream pipeline.
+    a = float(np.percentile(img, 1))
+    b = float(np.percentile(img, 99.5))
+    img_n = np.clip((img - a) / max(b - a, 1e-9), 0, 1).astype(np.float32)
+
+    # remember defaults so "Reset" goes back to the caller-supplied values
+    DEFAULTS = dict(
+        tubule_r=float(tubule_radius),
+        sensitivity=float(sensitivity),
+        min_size=int(min_object_size),
+        close_r=int(gap_closing),
+        use_thickness=bool(use_thickness_filter),
+        min_thick=float(min_thickness),
+        max_thick=float(max_thickness),
+    )
+
+    # --------- mutable state shared by callbacks ---------
+    state = {
+        'tubule_r': DEFAULTS['tubule_r'],
+        'sensitivity': DEFAULTS['sensitivity'],
+        'min_size': DEFAULTS['min_size'],
+        'close_r': DEFAULTS['close_r'],
+        'use_thickness': DEFAULTS['use_thickness'],
+        'min_thick': DEFAULTS['min_thick'],
+        'max_thick': DEFAULTS['max_thick'],
+        # cached intermediates
+        'ridge': None,
+        'binary': None,
+        'thickness': None,    # local-thickness map (same shape as binary)
+        'skel_full': None,    # skeleton built on un-filtered binary
+        'excluded': None,     # binary mask of "out of [min,max] thickness"
+        'skel': None,         # skel_full AND NOT excluded
+        'nx': None,
+        'otsu_t': None,
+        'done': False,
+        # view toggles
+        'show_binary': True,
+        'show_skel': True,
+        'show_nodes': False,
+        'show_ridge': False,
+        'show_excluded': True,
+    }
+
+    def compute_ridge():
+        r = state['tubule_r']
+        # top-hat disk ~ 4x tubule radius removes broad background
+        th_radius = max(3, int(round(4 * r)))
+        th = white_tophat(img_n, disk(th_radius))
+        # multi-scale ridge sigmas spanning the expected tubule radius
+        sigmas = sorted({round(s, 2) for s in
+                         [max(0.5, 0.5 * r), r, 1.5 * r, 2.0 * r]})
+        ridge = meijering(th, sigmas=sigmas, black_ridges=False)
+        state['ridge'] = ridge.astype(np.float32)
+        pos = ridge[ridge > 0]
+        state['otsu_t'] = float(threshold_otsu(pos)) if pos.size else 0.0
+
+    def compute_binary():
+        if state['ridge'] is None:
+            return
+        t = state['otsu_t'] * state['sensitivity']
+        bn = state['ridge'] > t
+        if state['close_r'] > 0:
+            bn = binary_closing(bn, disk(int(round(state['close_r']))))
+        bn = remove_small_objects(bn, min_size=int(state['min_size']))
+        bn = remove_small_holes(bn, area_threshold=int(state['min_size']))
+        state['binary'] = bn
+        # binary changed -> invalidate thickness so it gets recomputed
+        state['thickness'] = None
+
+    def compute_thickness():
+        if state['binary'] is None:
+            state['thickness'] = None
+            return
+        state['thickness'] = _local_thickness_2d(state['binary'])
+
+    def compute_excluded():
+        """Build the 'excluded by thickness' mask (does NOT modify binary)."""
+        state['excluded'] = None
+        if not state['use_thickness']:
+            return
+        thk = state['thickness']
+        bn = state['binary']
+        if thk is None or bn is None:
+            return
+        lo, hi = state['min_thick'], state['max_thick']
+        if lo > hi:
+            lo, hi = hi, lo
+        out_of_range = (thk < lo) | (thk > hi)
+        state['excluded'] = bn & out_of_range
+
+    def compute_skeleton():
+        """Build the *unfiltered* skeleton from the current binary."""
+        if state['binary'] is None:
+            return
+        skel_full = _skel(state['binary'], method='lee').astype(bool)
+        state['skel_full'] = skel_full
+
+    def apply_thickness_filter_and_build_graph():
+        """Filter the skeleton with the excluded mask (post-skeletonization),
+        then rebuild the sknw graph from the *filtered* skeleton."""
+        if state['skel_full'] is None:
+            return
+        if state['excluded'] is not None:
+            skel = state['skel_full'] & ~state['excluded']
+        else:
+            skel = state['skel_full']
+        state['skel'] = skel
+        try:
+            g = sknw.build_sknw(skel.astype(np.uint8), multi=True)
+        except Exception as exc:
+            print(f"  [select_mask_gui] sknw.build_sknw failed: {exc}")
+            g = nx.MultiGraph()
+        state['nx'] = g
+
+    def recompute_from_binary():
+        """When binary changes: thickness, full skeleton, excluded, filter."""
+        compute_thickness()
+        compute_skeleton()
+        compute_excluded()
+        apply_thickness_filter_and_build_graph()
+
+    def recompute_from_thickness():
+        """When thickness range / filter toggle changes (thickness cached)."""
+        compute_excluded()
+        apply_thickness_filter_and_build_graph()
+
+    def recompute_all():
+        compute_ridge()
+        compute_binary()
+        recompute_from_binary()
+
+    recompute_all()
+
+    # --------- figure layout ---------
+    fig = plt.figure(figsize=(11, 11))
+    # leave a taller bottom strip for the extra sliders + checkboxes
+    fig.subplots_adjust(left=0.05, right=0.98, top=0.95, bottom=0.40)
+    ax = fig.add_subplot(111)
+    ax.set_facecolor('black')
+
+    vmin = float(np.percentile(img, 1))
+    vmax = float(np.percentile(img, 99))
+    ax.imshow(img, cmap='gray', vmin=vmin, vmax=vmax)
+
+    # ridge map overlay (toggle)
+    rmax = float(np.percentile(state['ridge'], 99.5)) + 1e-9
+    im_ridge = ax.imshow(state['ridge'], cmap='inferno', alpha=0.55,
+                         vmin=0, vmax=rmax, visible=state['show_ridge'])
+
+    # binary overlay (red, alpha)
+    bin_rgba = np.zeros((*img.shape, 4), dtype=np.float32)
+    im_bin = ax.imshow(bin_rgba, visible=state['show_binary'])
+
+    # excluded-by-thickness overlay (cyan dots so it visually contrasts
+    # with the red binary and green skeleton)
+    excl_rgba = np.zeros((*img.shape, 4), dtype=np.float32)
+    im_excl = ax.imshow(excl_rgba, visible=state['show_excluded'])
+
+    # skeleton overlay (green) -- shows the FILTERED skeleton (post-thickness)
+    skel_rgba = np.zeros((*img.shape, 4), dtype=np.float32)
+    im_skel = ax.imshow(skel_rgba, visible=state['show_skel'])
+
+    # network nodes scatter
+    node_scat = ax.scatter([], [], c='yellow', s=15,
+                           edgecolors='black', linewidths=0.4,
+                           visible=state['show_nodes'])
+
+    ax.set_title("Mito mask GUI - tune sliders, click Done when satisfied")
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    # --------- sliders ---------
+    axcolor = 'lightgoldenrodyellow'
+    ax_tube = fig.add_axes([0.10, 0.33, 0.55, 0.022], facecolor=axcolor)
+    ax_sens = fig.add_axes([0.10, 0.29, 0.55, 0.022], facecolor=axcolor)
+    ax_min = fig.add_axes([0.10, 0.25, 0.55, 0.022], facecolor=axcolor)
+    ax_clos = fig.add_axes([0.10, 0.21, 0.55, 0.022], facecolor=axcolor)
+    ax_tmin = fig.add_axes([0.10, 0.17, 0.55, 0.022], facecolor=axcolor)
+    ax_tmax = fig.add_axes([0.10, 0.13, 0.55, 0.022], facecolor=axcolor)
+
+    s_tube = Slider(ax_tube, 'Tubule radius (px)', 1.0, 6.0,
+                    valinit=state['tubule_r'], valstep=0.1)
+    s_sens = Slider(ax_sens, 'Sensitivity', 0.3, 2.0,
+                    valinit=state['sensitivity'], valstep=0.02)
+    s_min = Slider(ax_min, 'Min size (px)', 5, 300,
+                   valinit=state['min_size'], valstep=1)
+    s_clos = Slider(ax_clos, 'Gap closing (px)', 0, 3,
+                    valinit=state['close_r'], valstep=1)
+    s_tmin = Slider(ax_tmin, 'Min thickness (px)', 0.0, 30.0,
+                    valinit=state['min_thick'], valstep=0.5)
+    s_tmax = Slider(ax_tmax, 'Max thickness (px)', 0.0, 30.0,
+                    valinit=state['max_thick'], valstep=0.5)
+
+    # --------- buttons ---------
+    ax_recompute = fig.add_axes([0.68, 0.33, 0.14, 0.035])
+    btn_recompute = Button(ax_recompute, 'Recompute ridge',
+                           color='lightblue', hovercolor='skyblue')
+
+    ax_reset = fig.add_axes([0.68, 0.13, 0.14, 0.035])
+    btn_reset = Button(ax_reset, 'Reset defaults',
+                       color='lightcoral', hovercolor='salmon')
+
+    ax_done = fig.add_axes([0.84, 0.13, 0.13, 0.035])
+    btn_done = Button(ax_done, 'Done',
+                      color='lightgreen', hovercolor='palegreen')
+
+    # --------- view toggles + thickness-filter toggle ---------
+    ax_check = fig.add_axes([0.68, 0.18, 0.29, 0.14])
+    check = CheckButtons(
+        ax_check,
+        ['Binary', 'Skeleton', 'Nodes', 'Ridge', 'Excluded', 'Filter ON'],
+        [state['show_binary'], state['show_skel'],
+         state['show_nodes'], state['show_ridge'],
+         state['show_excluded'], state['use_thickness']],
+    )
+
+    # --------- stats text ---------
+    stats_ax = fig.add_axes([0.10, 0.05, 0.86, 0.05])
+    stats_ax.axis('off')
+    stats_text = stats_ax.text(0.0, 0.5, '', va='center', fontsize=10,
+                               family='monospace')
+
+    def refresh_display():
+        # binary overlay (red)
+        rgba_b = np.zeros((*img.shape, 4), dtype=np.float32)
+        if state['binary'] is not None:
+            rgba_b[state['binary'], 0] = 1.0
+            rgba_b[state['binary'], 3] = 0.35
+        im_bin.set_data(rgba_b)
+
+        # excluded-by-thickness overlay (cyan)
+        rgba_e = np.zeros((*img.shape, 4), dtype=np.float32)
+        if state['excluded'] is not None and state['excluded'].any():
+            rgba_e[state['excluded'], 1] = 1.0  # G
+            rgba_e[state['excluded'], 2] = 1.0  # B  -> cyan
+            rgba_e[state['excluded'], 3] = 0.55
+        im_excl.set_data(rgba_e)
+
+        # skeleton overlay (green) -- filtered skeleton
+        rgba_s = np.zeros((*img.shape, 4), dtype=np.float32)
+        if state['skel'] is not None:
+            sk = state['skel'].astype(bool)
+            rgba_s[sk, 1] = 1.0
+            rgba_s[sk, 3] = 1.0
+        im_skel.set_data(rgba_s)
+
+        # ridge
+        if state['ridge'] is not None:
+            im_ridge.set_data(state['ridge'])
+            rmx = float(np.percentile(state['ridge'], 99.5)) + 1e-9
+            im_ridge.set_clim(0, rmx)
+
+        # nodes
+        if state['nx'] is not None and state['nx'].number_of_nodes() > 0:
+            nodes = state['nx'].nodes()
+            pts = np.array([[nodes[n]['o'][1], nodes[n]['o'][0]]
+                            for n in nodes])
+            node_scat.set_offsets(pts)
+        else:
+            node_scat.set_offsets(np.empty((0, 2)))
+
+        # visibility
+        im_bin.set_visible(state['show_binary'])
+        im_skel.set_visible(state['show_skel'])
+        node_scat.set_visible(state['show_nodes'])
+        im_ridge.set_visible(state['show_ridge'])
+        im_excl.set_visible(state['show_excluded'] and state['use_thickness'])
+
+        # stats
+        bin_pct = (100 * state['binary'].mean()
+                   if state['binary'] is not None else 0.0)
+        skel_px = (int(state['skel'].astype(bool).sum())
+                   if state['skel'] is not None else 0)
+        skel_full_px = (int(state['skel_full'].astype(bool).sum())
+                        if state['skel_full'] is not None else 0)
+        dropped = skel_full_px - skel_px
+        n_nodes = (state['nx'].number_of_nodes()
+                   if state['nx'] is not None else 0)
+        n_edges = (state['nx'].number_of_edges()
+                   if state['nx'] is not None else 0)
+
+        long_paths = 0
+        if state['nx'] is not None:
+            for u, v, k in state['nx'].edges(keys=True):
+                pts = state['nx'][u][v][k].get('pts')
+                if pts is not None and len(pts) >= 30:
+                    long_paths += 1
+
+        otsu = state['otsu_t'] or 0.0
+        thr = otsu * state['sensitivity']
+        if state['thickness'] is not None and state['binary'] is not None \
+                and state['binary'].any():
+            tvals = state['thickness'][state['binary']]
+            thick_summary = (f"thickness: p50={np.median(tvals):.1f} "
+                             f"p95={np.percentile(tvals, 95):.1f}px")
+        else:
+            thick_summary = "thickness: n/a"
+        filt_state = "ON" if state['use_thickness'] else "off"
+        stats_text.set_text(
+            f"binary: {bin_pct:5.2f}%   "
+            f"skel(filt): {skel_px:>6,}   "
+            f"dropped: {dropped:>5,}   "
+            f"nodes: {n_nodes:>4}   "
+            f"edges: {n_edges:>4}   "
+            f"paths>=30: {long_paths:>3}   "
+            f"thr: {thr:.3f}   "
+            f"{thick_summary}   "
+            f"filter[{state['min_thick']:.1f}-{state['max_thick']:.1f}]: {filt_state}"
+        )
+        fig.canvas.draw_idle()
+
+    refresh_display()
+
+    # ---- slider callbacks ----
+    def on_sens(_val):
+        state['sensitivity'] = float(s_sens.val)
+        compute_binary()
+        recompute_from_binary()
+        refresh_display()
+
+    def on_min(_val):
+        state['min_size'] = int(s_min.val)
+        compute_binary()
+        recompute_from_binary()
+        refresh_display()
+
+    def on_clos(_val):
+        state['close_r'] = int(s_clos.val)
+        compute_binary()
+        recompute_from_binary()
+        refresh_display()
+
+    def on_tube(_val):
+        # don't recompute on every drag (the ridge filter is slow);
+        # just remember the new value and wait for the button.
+        state['tubule_r'] = float(s_tube.val)
+
+    def on_tmin(_val):
+        state['min_thick'] = float(s_tmin.val)
+        recompute_from_thickness()
+        refresh_display()
+
+    def on_tmax(_val):
+        state['max_thick'] = float(s_tmax.val)
+        recompute_from_thickness()
+        refresh_display()
+
+    s_sens.on_changed(on_sens)
+    s_min.on_changed(on_min)
+    s_clos.on_changed(on_clos)
+    s_tube.on_changed(on_tube)
+    s_tmin.on_changed(on_tmin)
+    s_tmax.on_changed(on_tmax)
+
+    # ---- button callbacks ----
+    def on_recompute(_event):
+        state['tubule_r'] = float(s_tube.val)
+        recompute_all()
+        refresh_display()
+    btn_recompute.on_clicked(on_recompute)
+
+    def on_reset(_event):
+        # set sliders -> callbacks update state
+        s_tube.set_val(DEFAULTS['tubule_r'])
+        s_sens.set_val(DEFAULTS['sensitivity'])
+        s_min.set_val(DEFAULTS['min_size'])
+        s_clos.set_val(DEFAULTS['close_r'])
+        s_tmin.set_val(DEFAULTS['min_thick'])
+        s_tmax.set_val(DEFAULTS['max_thick'])
+        # also reset thickness-filter toggle through the CheckButtons
+        if state['use_thickness'] != DEFAULTS['use_thickness']:
+            try:
+                # idx 5 is 'Filter ON' in the CheckButtons list
+                check.set_active(5)
+            except Exception:
+                state['use_thickness'] = DEFAULTS['use_thickness']
+        state['tubule_r'] = DEFAULTS['tubule_r']
+        state['sensitivity'] = DEFAULTS['sensitivity']
+        state['min_size'] = DEFAULTS['min_size']
+        state['close_r'] = DEFAULTS['close_r']
+        state['min_thick'] = DEFAULTS['min_thick']
+        state['max_thick'] = DEFAULTS['max_thick']
+        state['use_thickness'] = DEFAULTS['use_thickness']
+        recompute_all()
+        refresh_display()
+    btn_reset.on_clicked(on_reset)
+
+    def on_done(_event):
+        state['done'] = True
+        plt.close(fig)
+    btn_done.on_clicked(on_done)
+
+    # ---- check buttons ----
+    def on_check(label):
+        if label == 'Binary':
+            state['show_binary'] = not state['show_binary']
+            refresh_display()
+        elif label == 'Skeleton':
+            state['show_skel'] = not state['show_skel']
+            refresh_display()
+        elif label == 'Nodes':
+            state['show_nodes'] = not state['show_nodes']
+            refresh_display()
+        elif label == 'Ridge':
+            state['show_ridge'] = not state['show_ridge']
+            refresh_display()
+        elif label == 'Excluded':
+            state['show_excluded'] = not state['show_excluded']
+            refresh_display()
+        elif label == 'Filter ON':
+            state['use_thickness'] = not state['use_thickness']
+            # thickness may not be computed yet if it was always off
+            if state['use_thickness'] and state['thickness'] is None:
+                compute_thickness()
+            recompute_from_thickness()
+            refresh_display()
+    check.on_clicked(on_check)
+
+    plt.show()
+
+    # If the user closed the window without clicking Done, still return the
+    # latest computed mask (consistent with select_threshold_gui's behaviour).
+    threshold_value = (state['otsu_t'] or 0.0) * state['sensitivity']
+    binary = (state['binary']
+              if state['binary'] is not None
+              else np.zeros_like(img, dtype=bool))
+    skel = (state['skel']
+            if state['skel'] is not None
+            else np.zeros_like(img, dtype=bool))
+    graph = state['nx'] if state['nx'] is not None else nx.MultiGraph()
+    return float(threshold_value), binary, skel, graph
+
+
+def compute_mito_mask_noninteractive(
+    image,
+    *,
+    tubule_radius=2.0,
+    sensitivity=1.0,
+    min_object_size=30,
+    gap_closing=1,
+    use_thickness_filter=False,
+    min_thickness=1.0,
+    max_thickness=20.0,
+):
+    """
+    Non-interactive (--no-gui) version of the ridge-filter mask pipeline.
+    Same logic as select_mask_gui, same return shape:
+
+        (threshold_value, mito_binary, mito_skeleton_filtered, mito_nx)
+
+    The thickness filter (when enabled) is applied AFTER skeletonization, so
+    it never affects the topology produced by skeletonize/sknw — it only
+    removes skeleton pixels whose underlying local thickness is outside the
+    [min_thickness, max_thickness] range, and the network graph is rebuilt
+    from the filtered skeleton.
+    """
+    from skimage.filters import meijering, threshold_otsu
+    from skimage.morphology import (
+        white_tophat, disk, remove_small_objects, remove_small_holes,
+        binary_closing, skeletonize as _skel,
+    )
+
+    img = np.asarray(image, dtype=np.float32)
+    a = float(np.percentile(img, 1))
+    b = float(np.percentile(img, 99.5))
+    img_n = np.clip((img - a) / max(b - a, 1e-9), 0, 1).astype(np.float32)
+
+    r = float(tubule_radius)
+    th_radius = max(3, int(round(4 * r)))
+    th = white_tophat(img_n, disk(th_radius))
+    sigmas = sorted({round(s, 2) for s in
+                     [max(0.5, 0.5 * r), r, 1.5 * r, 2.0 * r]})
+    ridge = meijering(th, sigmas=sigmas, black_ridges=False)
+
+    pos = ridge[ridge > 0]
+    otsu_t = float(threshold_otsu(pos)) if pos.size else 0.0
+    thr = otsu_t * float(sensitivity)
+
+    bn = ridge > thr
+    if gap_closing > 0:
+        bn = binary_closing(bn, disk(int(round(gap_closing))))
+    bn = remove_small_objects(bn, min_size=int(min_object_size))
+    bn = remove_small_holes(bn, area_threshold=int(min_object_size))
+
+    skel_full = _skel(bn, method='lee').astype(bool)
+
+    if use_thickness_filter:
+        thk = _local_thickness_2d(bn)
+        if thk is not None:
+            lo, hi = float(min_thickness), float(max_thickness)
+            if lo > hi:
+                lo, hi = hi, lo
+            excluded = bn & ((thk < lo) | (thk > hi))
+            skel = skel_full & ~excluded
+        else:
+            skel = skel_full
+    else:
+        skel = skel_full
+
+    try:
+        graph = sknw.build_sknw(skel.astype(np.uint8), multi=True)
+    except Exception as exc:
+        print(f"  [compute_mito_mask_noninteractive] sknw failed: {exc}")
+        graph = nx.MultiGraph()
+
+    return float(thr), bn, skel, graph
+
+
 def process_images(
     input_dir,
     input_pattern,
@@ -335,7 +939,14 @@ def process_images(
     use_threshold_gui,
     scan_width,
     path_sampling,
-    min_path_length
+    min_path_length,
+    tubule_radius=2.0,
+    sensitivity=1.0,
+    min_object_size=30,
+    gap_closing=1,
+    use_thickness_filter=False,
+    min_thickness=1.0,
+    max_thickness=20.0,
 ):
     """Main processing function for analyzing mitochondrial networks."""
     
@@ -384,10 +995,27 @@ def process_images(
         plt.show()
         mito_img_eq = mito_img_eq * mask
 
-        # Get threshold and binary image
+        # Get threshold and binary image via the new ridge-filter GUI.
+        # (The old single-slider GUI is still available as select_threshold_gui
+        # if you want to revert: just swap select_mask_gui for it below.)
+        pipeline_kwargs = dict(
+            tubule_radius=tubule_radius,
+            sensitivity=sensitivity,
+            min_object_size=min_object_size,
+            gap_closing=gap_closing,
+            use_thickness_filter=use_thickness_filter,
+            min_thickness=min_thickness,
+            max_thickness=max_thickness,
+        )
         if use_threshold_gui:
-            binarization_threshold, mito_binary, mito_skeleton, mito_nx = select_threshold_gui(mito_img_eq)
-            click.echo(f"Selected binarization threshold: {binarization_threshold:.3f}")
+            binarization_threshold, mito_binary, mito_skeleton, mito_nx = \
+                select_mask_gui(mito_img_eq, **pipeline_kwargs)
+            click.echo(f"Selected ridge threshold: {binarization_threshold:.3f}")
+        else:
+            # Non-interactive: run the same pipeline using config/CLI defaults.
+            binarization_threshold, mito_binary, mito_skeleton, mito_nx = \
+                compute_mito_mask_noninteractive(mito_img_eq, **pipeline_kwargs)
+            click.echo(f"Computed ridge threshold (no-gui): {binarization_threshold:.3f}")
 
         nodes = mito_nx.nodes()
         pos = np.array([[nodes[i]['o'][1], nodes[i]['o'][0]] for i in nodes])
@@ -538,18 +1166,43 @@ def process_images(
 @click.option('--scan-width', default=4, type=int, help='Pixels on each side of the path for scanning')
 @click.option('--path-sampling', default=5, type=int, help='Number of subpixel samples along the normal')
 @click.option('--min-path-length', default=30, type=int, help='Minimum path length to process')
-def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name, 
-         mito_channel, protein_channel, use_gui, scan_width, path_sampling, min_path_length):
+# --- ridge-filter mask pipeline (also live-tunable in the GUI) ---
+@click.option('--tubule-radius', default=2.0, type=float,
+              help='Tubule radius in px (drives top-hat disk and ridge sigmas). '
+                   'Default 2.0 is right for ~0.17 um/px decon data.')
+@click.option('--sensitivity', default=1.0, type=float,
+              help='Multiplier on the Otsu cut of the ridge response. '
+                   '1.0 = pure Otsu, <1 catches dim tubules, >1 is stricter.')
+@click.option('--min-object-size', default=30, type=int,
+              help='Drop binary connected components smaller than this many px.')
+@click.option('--gap-closing', default=1, type=int,
+              help='Binary closing disk radius (px) to bridge small breaks.')
+# --- thickness filter (applied AFTER skeletonization) ---
+@click.option('--use-thickness-filter/--no-use-thickness-filter', default=False,
+              help='Apply a local-thickness range filter to the skeleton. '
+                   'Requires the `localthickness` PyPI package.')
+@click.option('--min-thickness', default=1.0, type=float,
+              help='Minimum allowed local thickness (px) for skeleton pixels. '
+                   'Pixels with thickness below this are dropped from the '
+                   'skeleton (not from the binary).')
+@click.option('--max-thickness', default=20.0, type=float,
+              help='Maximum allowed local thickness (px) for skeleton pixels. '
+                   'Pixels with thickness above this (e.g. bright clumps) '
+                   'are dropped from the skeleton (not from the binary).')
+def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
+         mito_channel, protein_channel, use_gui, scan_width, path_sampling,
+         min_path_length, tubule_radius, sensitivity, min_object_size,
+         gap_closing, use_thickness_filter, min_thickness, max_thickness):
     """
     Analyze mitochondrial networks and protein distribution in fluorescence microscopy images.
-    
+
     This tool processes multi-channel TIFF images to identify mitochondrial cristae structure
     and quantify protein localization along the mitochondrial network.
     """
     click.echo("Starting Mitochondrial Protein Scanner")
     click.echo(f"Input directory: {input_dir}")
     click.echo(f"Pattern: {input_pattern}")
-    
+
     process_images(
         input_dir=input_dir,
         input_pattern=input_pattern,
@@ -561,7 +1214,14 @@ def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
         use_threshold_gui=use_gui,
         scan_width=scan_width,
         path_sampling=path_sampling,
-        min_path_length=min_path_length
+        min_path_length=min_path_length,
+        tubule_radius=tubule_radius,
+        sensitivity=sensitivity,
+        min_object_size=min_object_size,
+        gap_closing=gap_closing,
+        use_thickness_filter=use_thickness_filter,
+        min_thickness=min_thickness,
+        max_thickness=max_thickness,
     )
     
     click.echo("Processing complete!")

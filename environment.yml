@@ -16,4 +16,5 @@ dependencies:
   - pip:
     - sknw
     - tifffile
+    - localthickness
     - -e .
