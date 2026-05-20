@@ -207,28 +207,29 @@ analyze_omm_scans:
   peak_prominence: 0.1                     # Peak prominence threshold (0.0-1.0)
 ```
 
-#### **peak_spacing_histogram** - Inter-Peak Spacing on the Network
+#### **plot_peak_distance_analysis** - Consecutive Peak Distance Histogram
 Pool every per-mito CSV produced by `network_line_scan`, detect peaks on the
-`Scan_Intensity` column with intensity + prominence thresholds, and write a
-histogram of the **consecutive** peak-to-peak distances. Outputs are written
-into `output_dir` (defaults to `input_dir`):
+`Scan_Intensity` column (the protein / target channel) with intensity +
+prominence thresholds, and write a histogram of the **consecutive**
+peak-to-peak distances. Outputs go into `output_directory` (defaults to
+`csv_directory`):
 
-- `peak_spacing_histogram.png` — pooled histogram with median + mean overlays
-- `peak_spacings.csv` — one row per spacing, with `image_name`, `mito_id`, `spacing`
-- `peak_spacing_per_track.csv` — per-track summary (n_peaks, path_length, mean/median spacing)
-- `peak_spacing_summary.txt` — global stats
+- `peak_distance_histogram.png` — pooled histogram with median + mean overlays
+- `peak_distances.csv` — one row per consecutive pair: `image_name`, `mito_id`, `distance`
+- `peak_distance_per_track.csv` — per-track summary (n_peaks, path_length, mean/median distance)
+- `peak_distance_summary.txt` — global stats
 
 ```yaml
-peak_spacing_histogram:
-  input_dir: '/path/to/line_scan/output_dir/'  # Where the per-mito CSVs live
-  input_pattern: '*_mito_*.csv'                # Glob for the CSV files
-  output_dir: ''                               # Default: same as input_dir
-  peak_min_intensity: 0.3                      # Min Scan_Intensity (0-1)
-  peak_min_prominence: 0.1                     # Min prominence (0-1)
-  peak_prominence_wlen: 10                     # peak_prominences wlen
-  bin_width: 5.0                               # Histogram bin width (px)
-  max_distance: 0.0                            # X-axis cap; 0 = auto (data p99)
-  recursive: false                             # Recurse into subdirectories
+plot_peak_distance_analysis:
+  csv_directory: '/path/to/line_scan/output_dir/'  # Where the per-mito CSVs live
+  input_pattern: '*_mito_*.csv'                    # Glob for the CSV files
+  output_directory: ''                             # Default: same as csv_directory
+  peak_min_intensity: 0.3                          # Min Scan_Intensity (0-1)
+  peak_min_prominence: 0.1                         # Min prominence (0-1)
+  peak_prominence_wlen: 10                         # peak_prominences wlen
+  bin_width: 5.0                                   # Histogram bin width (px)
+  max_distance: 0.0                                # X-axis cap; 0 = auto (data p99)
+  recursive: false                                 # Recurse into subdirectories
 ```
 
 Distances are reported in whatever units the CSV's `Distance` column is in
@@ -244,7 +245,7 @@ mito_protein_localization --config config.yaml refine_mask
 mito_protein_localization --config config.yaml omm_normal_scan
 mito_protein_localization --config config.yaml network_line_scan
 mito_protein_localization --config config.yaml analyze_omm_scans
-mito_protein_localization --config config.yaml peak_spacing_histogram
+mito_protein_localization --config config.yaml plot_peak_distance_analysis
 ```
 
 Or run all workflows in sequence:

@@ -57,20 +57,6 @@ network_line_scan:
                               # {basename}_mito_binary.tif (uint8 0/255) into
                               # this directory. Empty = skip saving.
 
-# Peak-spacing histogram: pool every line-scan CSV in a directory, find
-# Scan_Intensity peaks with intensity + prominence thresholds, and plot a
-# histogram of consecutive peak-to-peak distances.
-peak_spacing_histogram:
-  input_dir: '20251021_decon_data/tiff/snap003run1'  # Directory of per-mito CSVs
-  input_pattern: '*_mito_*.csv'                      # Glob for CSV files
-  output_dir: ''                                     # Default: same as input_dir
-  peak_min_intensity: 0.3                            # Height threshold (0-1)
-  peak_min_prominence: 0.1                           # Prominence threshold (0-1)
-  peak_prominence_wlen: 10                           # peak_prominences wlen
-  bin_width: 5.0                                     # Histogram bin width (px)
-  max_distance: 0.0                                  # X-axis cap; 0 = auto (p99)
-  recursive: false                                   # Recurse into subdirs
-
 # Analyze OMM scans: intensity-profile peak analysis on OMM normal-scan pickles
 analyze_omm_scans:
   input_directory: '/path/to/pickle/files/'
@@ -78,22 +64,17 @@ analyze_omm_scans:
   peak_threshold: 0.3
   peak_prominence: 0.1
 
-# Plot peak distance analysis: box/violin plots of the OFFSET between mito
-# peaks and target/protein peaks per mitochondrial path, ingested from a
-# directory of network_line_scan per-mito CSVs.
+# Plot peak distance analysis: pool every per-mito CSV from network_line_scan,
+# detect peaks on Scan_Intensity with min intensity + min prominence, compute
+# the distance between consecutive peaks within each track, and histogram all
+# of them pooled across tracks.
 plot_peak_distance_analysis:
-  csv_directory: '20251021_decon_data/tiff/snap003run1'  # Directory of per-mito CSVs
-  input_pattern: '*_mito_*.csv'
-  output_directory: ''
-  group_by_chars: 5
-  min_mito_intensity: 0.3
-  max_mito_intensity: null
-  min_target_intensity: 0.2
-  max_target_intensity: null
-  min_mito_prominence: 0.08
-  max_mito_prominence: null
-  min_target_prominence: 0.05
-  max_target_prominence: null
-  bin_width: 1.0
-  max_abs_distance: 0.0
-  recursive: false
+  csv_directory: '20251021_decon_data/tiff/snap003run1'  # Dir of per-mito CSVs
+  input_pattern: '*_mito_*.csv'                          # Glob for CSV files
+  output_directory: ''                                   # Default: same as csv_directory
+  peak_min_intensity: 0.3                                # Min Scan_Intensity (0-1)
+  peak_min_prominence: 0.1                               # Min prominence (0-1)
+  peak_prominence_wlen: 10                               # wlen for peak_prominences
+  bin_width: 5.0                                         # Histogram bin width (px)
+  max_distance: 0.0                                      # X-axis cap; 0 = auto (p99)
+  recursive: false                                       # Recurse into subdirs

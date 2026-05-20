@@ -279,35 +279,6 @@ def plot_peak_distance_analysis(ctx, config):
     plot_peak_distance_analysis_main(standalone_mode=False)
 
 
-@cli.command(name='peak-spacing-histogram')
-@click.option('--config', type=click.Path(exists=True), required=True,
-              help='Path to config.yaml file')
-@click.pass_context
-def peak_spacing_histogram(ctx, config):
-    """Pool every line-scan CSV, find peaks on Scan_Intensity, and histogram
-    the distance between consecutive peaks (plot_peak_spacing_histogram.py)."""
-    config_file = config
-    if not config_file:
-        raise click.ClickException("--config option is required")
-
-    config_data = load_config(config_file)
-    if 'peak_spacing_histogram' not in config_data:
-        raise click.ClickException(
-            "'peak_spacing_histogram' section not found in config.yaml"
-        )
-
-    sh_config = config_data['peak_spacing_histogram']
-    args = config_to_args(sh_config)
-
-    click.echo(f"Running peak_spacing_histogram with config: {sh_config}")
-
-    # Lazy import: only load the heavy workflow when this command runs.
-    from bin.plot_peak_spacing_histogram import main as plot_peak_spacing_histogram_main
-
-    sys.argv = ['plot_peak_spacing_histogram'] + args
-    plot_peak_spacing_histogram_main(standalone_mode=False)
-
-
 def main():
     """Main entry point."""
     cli(obj={})

@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 
 """
-Compute the offset between mitochondria peaks and protein/target peaks along
-each per-mito line scan, and plot the distribution (box + violin) grouped by
-the first N characters of the source image name.
+Pool every per-mito line-scan CSV under an input directory, detect peaks on
+the Scan_Intensity column (protein/target channel) with user-supplied
+intensity + prominence thresholds, compute the distance between
+*consecutive* peaks within each track, and write a histogram of all the
+distances pooled across every track.
 
-Input: a DIRECTORY of per-mito CSVs produced by `network_line_scan`. Each CSV
-must have columns:  Distance, Mito_Intensity, Scan_Intensity.
+CSV input format (produced by mito_protein_line_scanner.py):
+  columns: Distance, Mito_Intensity, Scan_Intensity
+  one row per sampled point along a mitochondrial path; intensities are
+  normalised to [0, 1] inside the line scanner.
 
-For each CSV:
-  - peaks are detected on Mito_Intensity and Scan_Intensity with the configured
-    intensity (height) + prominence thresholds
-  - every protein/target peak is paired with the *nearest* mito peak along the
-    Distance axis
-  - one row is emitted per paired protein peak, with columns:
-        image_name, mito_id,
-        mito_peak_distance, target_peak_distance,
-        mito_peak_intensity, mito_peak_prominence,
-        target_peak_intensity, target_peak_prominence
-This gives the existing groupby + outlier + box/violin code the exact same
-column shape it had when consuming `analyze_omm_scans` scan_data.csv, so the
-plot itself is unchanged — only the data ingestion is new.
+Outputs (in --output-directory, defaults to --csv-directory):
+  peak_distance_histogram.png      pooled histogram of consecutive distances
+  peak_distances.csv               every distance value (one row per pair)
+  peak_distance_per_track.csv      per-track summary
+  peak_distance_summary.txt        global summary stats
+
+Distances are in whatever units the CSV's Distance column is in (pixels by
+default for the line scanner).
 """
 
 import glob
@@ -33,16 +32,13 @@ import pandas as pd
 from scipy.signal import find_peaks, peak_prominences
 
 
-# Per-mito CSV filename pattern emitted by network_line_scan.
 DEFAULT_INPUT_PATTERN = '*_mito_*.csv'
-# Window length (in samples) used for peak_prominences. Matches the line
-# scanner's per-mito plotting convention.
-PROMINENCE_WLEN = 10
 
+
+# -------- helpers --------------------------------------------------------
 
 def _parse_image_name(path):
-    """Recover the source image name from a per-mito CSV path by stripping
-    the trailing `_mito_<N>.csv` suffix."""
+    """Strip the trailing `_mito_<N>.csv` to recover the source image name."""
     base = os.path.basename(path)
     base = base[:-4] if base.lower().endswith('.csv') else base
     idx = base.rfind('_mito_')
@@ -63,261 +59,184 @@ def _parse_mito_id(path):
         return -1
 
 
-def _find_filtered_peaks(y, min_intensity, min_prominence, wlen=PROMINENCE_WLEN):
-    """Detect peaks above `min_intensity` with prominence >= `min_prominence`.
-    Returns (peak_indices, peak_prominences) — both same length, both in the
-    original sample-index space."""
+def find_filtered_peaks(y, min_intensity, min_prominence, wlen):
+    """Detect peaks with `height >= min_intensity` and
+    `prominence >= min_prominence`."""
     y = np.asarray(y, dtype=float)
     if y.size < 3:
-        return np.array([], dtype=int), np.array([])
-    peaks, _ = find_peaks(y, height=min_intensity if min_intensity is not None else None)
+        return np.array([], dtype=int)
+    peaks, _ = find_peaks(y, height=min_intensity)
     if peaks.size == 0:
-        return peaks, np.array([])
+        return peaks
     proms = peak_prominences(y, peaks, wlen=wlen)[0]
-    if min_prominence is not None:
-        mask = proms >= min_prominence
-        return peaks[mask], proms[mask]
-    return peaks, proms
+    return peaks[proms >= min_prominence]
 
 
-def build_scan_data_from_line_scan_dir(csv_directory, input_pattern,
-                                       min_mito_intensity, min_mito_prominence,
-                                       min_target_intensity, min_target_prominence,
-                                       recursive=False):
-    """Read every per-mito CSV in `csv_directory`, detect peaks on both
-    channels, pair each protein peak to the nearest mito peak, and assemble
-    a DataFrame matching the schema the downstream plotting code expects.
-    """
+def consecutive_distances(distance, peak_indices):
+    """Return distance[peak[i+1]] - distance[peak[i]] for sorted peaks."""
+    if peak_indices.size < 2:
+        return np.array([], dtype=float)
+    d = np.asarray(distance, dtype=float)
+    # defensive sort in case the line scanner ever emits non-monotonic Distance
+    order = np.argsort(d)
+    d_sorted = d[order]
+    inv = np.empty_like(order); inv[order] = np.arange(order.size)
+    peak_sorted = np.sort(inv[peak_indices])
+    return np.diff(d_sorted[peak_sorted])
+
+
+# -------- CLI ------------------------------------------------------------
+
+@click.command()
+@click.option('--csv-directory', required=True,
+              type=click.Path(exists=True, file_okay=False),
+              help='Directory of per-mito line-scan CSVs '
+                   '(columns: Distance, Mito_Intensity, Scan_Intensity).')
+@click.option('--input-pattern', default=DEFAULT_INPUT_PATTERN, show_default=True,
+              help='Glob within --csv-directory.')
+@click.option('--output-directory', default='', type=click.Path(),
+              help='Where to write outputs (default = --csv-directory).')
+@click.option('--peak-min-intensity', default=0.3, show_default=True, type=float,
+              help='Minimum Scan_Intensity (0-1) to count as a peak.')
+@click.option('--peak-min-prominence', default=0.1, show_default=True, type=float,
+              help='Minimum peak prominence (0-1).')
+@click.option('--peak-prominence-wlen', default=10, show_default=True, type=int,
+              help='`wlen` passed to scipy.signal.peak_prominences.')
+@click.option('--bin-width', default=5.0, show_default=True, type=float,
+              help='Histogram bin width in px.')
+@click.option('--max-distance', default=0.0, show_default=True, type=float,
+              help='Histogram x-axis cap; 0 = auto from data (p99).')
+@click.option('--recursive/--no-recursive', default=False,
+              help='Recurse into subdirectories of --csv-directory.')
+def main(csv_directory, input_pattern, output_directory,
+         peak_min_intensity, peak_min_prominence, peak_prominence_wlen,
+         bin_width, max_distance, recursive):
+    """Pool consecutive peak-to-peak distances on Scan_Intensity from every
+    per-mito CSV under --csv-directory and plot a histogram."""
+    out_dir = output_directory or csv_directory
+    os.makedirs(out_dir, exist_ok=True)
+
     if recursive:
-        files = sorted(glob.glob(
+        csv_files = sorted(glob.glob(
             os.path.join(csv_directory, '**', input_pattern), recursive=True))
     else:
-        files = sorted(glob.glob(os.path.join(csv_directory, input_pattern)))
-    if not files:
+        csv_files = sorted(glob.glob(os.path.join(csv_directory, input_pattern)))
+
+    if not csv_files:
         raise click.ClickException(
             f"No CSV files matched {input_pattern!r} under {csv_directory!r}"
         )
+    click.echo(f"Found {len(csv_files)} CSV files in {csv_directory}")
 
-    print(f"Found {len(files)} CSV files in {csv_directory}")
+    all_distances = []   # rows: {image_name, mito_id, distance}
+    per_track = []       # one row per CSV
+    n_short = 0
+    n_no_pair = 0
+    n_bad = 0
 
-    rows = []
-    n_short = n_no_mito = n_no_scan = 0
-    for f in files:
+    for f in csv_files:
         try:
             df = pd.read_csv(f)
         except Exception as exc:
-            print(f"  WARN: failed to read {f}: {exc}")
+            click.echo(f"  WARN: failed to read {f}: {exc}")
+            n_bad += 1
             continue
-        needed = {'Distance', 'Mito_Intensity', 'Scan_Intensity'}
-        if not needed.issubset(df.columns):
-            print(f"  WARN: {os.path.basename(f)} missing {needed - set(df.columns)}; skipping.")
+        if not {'Distance', 'Scan_Intensity'}.issubset(df.columns):
+            click.echo(f"  WARN: {os.path.basename(f)} missing Distance/"
+                       f"Scan_Intensity; skipping.")
+            n_bad += 1
             continue
+
+        img = _parse_image_name(f)
+        mid = _parse_mito_id(f)
         d = df['Distance'].to_numpy(dtype=float)
-        mi = df['Mito_Intensity'].to_numpy(dtype=float)
         si = df['Scan_Intensity'].to_numpy(dtype=float)
-        if d.size < 3:
+
+        if si.size < 3:
             n_short += 1
             continue
 
-        mito_idx, mito_proms = _find_filtered_peaks(
-            mi, min_mito_intensity, min_mito_prominence)
-        scan_idx, scan_proms = _find_filtered_peaks(
-            si, min_target_intensity, min_target_prominence)
-
-        if mito_idx.size == 0:
-            n_no_mito += 1
-            continue
-        if scan_idx.size == 0:
-            n_no_scan += 1
-            continue
-
-        img_name = _parse_image_name(f)
-        mito_id = _parse_mito_id(f)
-        mito_d = d[mito_idx]
-        scan_d = d[scan_idx]
-
-        # For each protein/target peak, pair with the *nearest* mito peak.
-        for j, s_pos in enumerate(scan_d):
-            k = int(np.argmin(np.abs(mito_d - s_pos)))
-            rows.append({
-                'image_name': img_name,
-                'mito_id': mito_id,
-                'mito_peak_distance': float(mito_d[k]),
-                'mito_peak_intensity': float(mi[mito_idx[k]]),
-                'mito_peak_prominence': float(mito_proms[k]),
-                'target_peak_distance': float(s_pos),
-                'target_peak_intensity': float(si[scan_idx[j]]),
-                'target_peak_prominence': float(scan_proms[j]),
-            })
-
-    print(f"  Skipped (short):      {n_short}")
-    print(f"  Skipped (no mito pk): {n_no_mito}")
-    print(f"  Skipped (no scan pk): {n_no_scan}")
-    print(f"  Paired peaks total:   {len(rows)}")
-
-    if not rows:
-        raise click.ClickException(
-            "No peaks found in any CSV. Loosen min_*_intensity / min_*_prominence."
+        peaks = find_filtered_peaks(
+            si,
+            min_intensity=peak_min_intensity,
+            min_prominence=peak_min_prominence,
+            wlen=peak_prominence_wlen,
         )
-    return pd.DataFrame(rows)
+        distances = consecutive_distances(d, peaks)
 
+        per_track.append({
+            'image_name': img,
+            'mito_id': mid,
+            'n_samples': int(si.size),
+            'path_length': float(d.max() - d.min()) if d.size else 0.0,
+            'n_peaks': int(peaks.size),
+            'n_distances': int(distances.size),
+            'mean_distance': float(distances.mean()) if distances.size else np.nan,
+            'median_distance': (float(np.median(distances))
+                                if distances.size else np.nan),
+        })
 
-def identify_outliers(df, column='peak_distance'):
-    """
-    IQR-based outlier detection on `column`, per group.
+        if distances.size == 0:
+            n_no_pair += 1
+            continue
 
-    Args:
-        df: DataFrame with 'group', the chosen `column`, and 'image_name' columns
-        column: name of the numeric column to scan for outliers
+        for v in distances:
+            all_distances.append({'image_name': img, 'mito_id': mid,
+                                  'distance': float(v)})
 
-    Returns:
-        List of dicts with group, image_name, value, lower_bound, upper_bound.
-    """
-    outliers = []
+    if not all_distances:
+        raise click.ClickException(
+            "No consecutive peak pairs found. Loosen "
+            "--peak-min-intensity / --peak-min-prominence."
+        )
 
-    groups = sorted(df['group'].unique())
-    for group in groups:
-        group_data = df[df['group'] == group]
-        values = group_data[column]
+    distances_df = pd.DataFrame(all_distances)
+    per_track_df = pd.DataFrame(per_track)
 
-        Q1 = values.quantile(0.25)
-        Q3 = values.quantile(0.75)
-        IQR = Q3 - Q1
+    distances_csv = os.path.join(out_dir, 'peak_distances.csv')
+    per_track_csv = os.path.join(out_dir, 'peak_distance_per_track.csv')
+    summary_txt = os.path.join(out_dir, 'peak_distance_summary.txt')
+    hist_png = os.path.join(out_dir, 'peak_distance_histogram.png')
 
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
+    distances_df.to_csv(distances_csv, index=False)
+    per_track_df.to_csv(per_track_csv, index=False)
 
-        group_outliers = group_data[(group_data[column] < lower_bound) |
-                                    (group_data[column] > upper_bound)]
-
-        for _, row in group_outliers.iterrows():
-            outliers.append({
-                'group': group,
-                'image_name': row['image_name'],
-                column: row[column],
-                'lower_bound': lower_bound,
-                'upper_bound': upper_bound,
-            })
-
-    return outliers
-
-
-def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
-                           output_dir=None, group_by_chars=5,
-                           min_mito_intensity=None, max_mito_intensity=None,
-                           min_target_intensity=None, max_target_intensity=None,
-                           min_mito_prominence=None, max_mito_prominence=None,
-                           min_target_prominence=None, max_target_prominence=None,
-                           bin_width=1.0, max_abs_distance=0.0,
-                           recursive=False):
-    """
-    Build the mito-vs-protein peak-distance dataframe from a directory of
-    network_line_scan per-mito CSVs, then plot the distribution (box + violin)
-    grouped by the first N characters of image_name.
-
-    Args:
-        csv_directory: Directory containing per-mito CSVs from network_line_scan.
-        input_pattern: Glob pattern within the directory (default: '*_mito_*.csv').
-        output_dir: Where to save outputs (defaults to csv_directory).
-        group_by_chars: Number of starting characters of image_name to group by.
-        min_*_intensity / min_*_prominence: peak-detection thresholds applied
-            during ingestion. Max_* thresholds are applied as POST-FILTER
-            constraints on the resulting peak attributes (same semantics as
-            the previous OMM-based version of this script).
-        recursive: If True, recurse into subdirectories when globbing.
-    """
-    # Resolve output directory before any I/O.
-    if output_dir is None or output_dir == '':
-        output_dir = csv_directory
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
-    # 1) ingest: detect peaks per CSV with the min thresholds, then pair.
-    df = build_scan_data_from_line_scan_dir(
-        csv_directory,
-        input_pattern=input_pattern,
-        min_mito_intensity=min_mito_intensity,
-        min_mito_prominence=min_mito_prominence,
-        min_target_intensity=min_target_intensity,
-        min_target_prominence=min_target_prominence,
-        recursive=recursive,
+    vals = distances_df['distance'].to_numpy()
+    summary = (
+        f"Peak-distance summary\n"
+        f"  Input dir:                {csv_directory}\n"
+        f"  Pattern:                  {input_pattern}\n"
+        f"  CSVs found:               {len(csv_files)}\n"
+        f"  CSVs unreadable/bad:      {n_bad}\n"
+        f"  CSVs too short:           {n_short}\n"
+        f"  CSVs with <2 peaks:       {n_no_pair}\n"
+        f"  Tracks contributing:      {(per_track_df['n_distances'] > 0).sum()}\n"
+        f"  Total peaks detected:     {int(per_track_df['n_peaks'].sum())}\n"
+        f"  Total consecutive pairs:  {vals.size}\n"
+        f"  Thresholds:               intensity>={peak_min_intensity}  "
+        f"prominence>={peak_min_prominence}  wlen={peak_prominence_wlen}\n"
+        f"  Units:                    same as CSV 'Distance' column (px by default)\n"
+        f"  Distance stats:\n"
+        f"    mean   = {vals.mean():.3f}\n"
+        f"    median = {np.median(vals):.3f}\n"
+        f"    std    = {vals.std():.3f}\n"
+        f"    p10    = {np.percentile(vals, 10):.3f}\n"
+        f"    p25    = {np.percentile(vals, 25):.3f}\n"
+        f"    p75    = {np.percentile(vals, 75):.3f}\n"
+        f"    p90    = {np.percentile(vals, 90):.3f}\n"
+        f"    p99    = {np.percentile(vals, 99):.3f}\n"
+        f"    min    = {vals.min():.3f}\n"
+        f"    max    = {vals.max():.3f}\n"
     )
-    original_count = len(df)
+    click.echo(summary)
+    with open(summary_txt, 'w') as fh:
+        fh.write(summary)
 
-    # 2) post-filter: max thresholds apply after pairing.
-    print("Applying max-thresholds:")
-    if max_mito_intensity is not None:
-        print(f"  Mito intensity <= {max_mito_intensity}")
-        df = df[df['mito_peak_intensity'] <= max_mito_intensity]
-    if max_target_intensity is not None:
-        print(f"  Target intensity <= {max_target_intensity}")
-        df = df[df['target_peak_intensity'] <= max_target_intensity]
-    if max_mito_prominence is not None:
-        print(f"  Mito prominence <= {max_mito_prominence}")
-        df = df[df['mito_peak_prominence'] <= max_mito_prominence]
-    if max_target_prominence is not None:
-        print(f"  Target prominence <= {max_target_prominence}")
-        df = df[df['target_peak_prominence'] <= max_target_prominence]
-
-    filtered_count = len(df)
-    print(f"\nPaired peaks: {original_count} ingested -> {filtered_count} after max-filters")
-
-    if filtered_count == 0:
-        print("No data remaining after applying thresholds!")
-        return
-
-    # Extract the specified number of characters from image_name as group
-    df['group'] = df['image_name'].str[:group_by_chars]
-
-    # Absolute distance between the paired mito peak and protein/target peak,
-    # in pixels along the path. We deliberately take the absolute value: the
-    # sign of (mito - target) on a line scan just reflects which direction
-    # the path happened to be traced, so it has no biological meaning here.
-    # (Carrying a signed difference was an OMM-scan convention that does not
-    # transfer to the network line scan output.)
-    df['peak_distance'] = np.abs(
-        df['mito_peak_distance'] - df['target_peak_distance']
-    )
-
-    # Persist the assembled scan_data for downstream inspection.
-    scan_data_path = os.path.join(output_dir, 'scan_data.csv')
-    df.to_csv(scan_data_path, index=False)
-    print(f"Saved assembled scan_data.csv: {scan_data_path}")
-
-    print(f"Groups: {df['group'].unique()}")
-    print(f"\nSummary statistics (peak_distance, px):")
-    print(df.groupby('group')['peak_distance'].describe())
-
-    # Identify and print outliers (on the absolute distance)
-    outliers = identify_outliers(df, column='peak_distance')
-    if outliers:
-        print(f"\n\nOUTLIERS DETECTED ({len(outliers)} total):")
-        print("-" * 80)
-        for outlier in outliers:
-            print(f"Group: {outlier['group']:5s} | Image: {outlier['image_name']:40s} | "
-                  f"Value: {outlier['peak_distance']:8.2f} | "
-                  f"Bounds: [{outlier['lower_bound']:.2f}, {outlier['upper_bound']:.2f}]")
-
-        # Save outliers to CSV file
-        outliers_df = pd.DataFrame(outliers)
-        outliers_file = os.path.join(output_dir, 'peak_distance_outliers.csv')
-        outliers_df.to_csv(outliers_file, index=False)
-        print(f"\nOutliers saved to {outliers_file}")
-    else:
-        print("\nNo outliers detected.")
-
-
-    # Histogram of |mito_peak_distance - target_peak_distance|, pooled across
-    # all paired peaks. Median + mean overlaid. The x-axis cap defaults to
-    # the data's p99 unless the caller pinned it via `max_abs_distance`.
-    vals = df['peak_distance'].to_numpy(dtype=float)   # already >= 0
-    if max_abs_distance and max_abs_distance > 0:
-        upper = float(max_abs_distance)
-    else:
-        upper = float(np.percentile(vals, 99))
-    upper = max(upper, float(bin_width))
+    # Histogram
+    upper = float(max_distance) if max_distance > 0 else float(
+        np.percentile(vals, 99))
+    upper = max(upper, bin_width)
     bins = np.arange(0.0, upper + bin_width, bin_width)
-
     clipped = vals[vals <= upper]
     n_clipped = vals.size - clipped.size
 
@@ -327,94 +246,28 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
                linewidth=1.5, label=f'median = {np.median(vals):.2f}')
     ax.axvline(float(vals.mean()), color='orange', linestyle=':',
                linewidth=1.5, label=f'mean = {vals.mean():.2f}')
-    ax.set_xlabel('|Mito peak − Target peak| distance along path (px)')
+    ax.set_xlabel('Consecutive peak-to-peak distance (px)')
     ax.set_ylabel('Count')
-    title = (f'Mito-to-target peak distance  (n={vals.size} paired peaks from '
-             f"{df['mito_id'].nunique()} tracks, {df['image_name'].nunique()} images)")
+    title = (f'Consecutive Scan_Intensity peak distances  '
+             f"(n={vals.size} from {(per_track_df['n_distances'] > 0).sum()} tracks, "
+             f"{per_track_df['image_name'].nunique()} images)\n"
+             f'intensity ≥ {peak_min_intensity}, prominence ≥ {peak_min_prominence}')
     if n_clipped:
-        title += f'  ·  {n_clipped} values > {upper:.1f} px not shown'
+        title += f'  ·  {n_clipped} distances > {upper:.1f} px not shown'
     ax.set_title(title)
     ax.set_xlim(0, upper)
     ax.legend()
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
-    output_file = os.path.join(output_dir, 'peak_distance_histogram.png')
-    fig.savefig(output_file, dpi=150)
+    fig.savefig(hist_png, dpi=150)
     plt.close(fig)
-    print(f"\nSaved histogram to {output_file}")
+
+    click.echo("Wrote:")
+    click.echo(f"  {hist_png}")
+    click.echo(f"  {distances_csv}")
+    click.echo(f"  {per_track_csv}")
+    click.echo(f"  {summary_txt}")
 
 
-@click.command()
-@click.option('--csv-directory', type=click.Path(exists=True, file_okay=False),
-              required=True,
-              help='Directory containing per-mito CSVs from network_line_scan '
-                   '(columns: Distance, Mito_Intensity, Scan_Intensity).')
-@click.option('--input-pattern', type=str, default=DEFAULT_INPUT_PATTERN,
-              show_default=True,
-              help='Glob pattern for the per-mito CSV files inside --csv-directory.')
-@click.option('--output-directory', type=click.Path(), default=None,
-              help='Output directory for plots and assembled scan_data.csv '
-                   '(defaults to --csv-directory).')
-@click.option('--group-by-chars', type=int, default=5, show_default=True,
-              help='Number of starting characters of image_name to group by.')
-@click.option('--min-mito-intensity', type=float, default=0.3, show_default=True,
-              help='Minimum mito peak intensity (height threshold during ingestion).')
-@click.option('--max-mito-intensity', type=float, default=None,
-              help='Maximum mito peak intensity (post-pair filter).')
-@click.option('--min-target-intensity', type=float, default=0.2, show_default=True,
-              help='Minimum target peak intensity (height threshold during ingestion).')
-@click.option('--max-target-intensity', type=float, default=None,
-              help='Maximum target peak intensity (post-pair filter).')
-@click.option('--min-mito-prominence', type=float, default=0.08, show_default=True,
-              help='Minimum mito peak prominence (filter during ingestion).')
-@click.option('--max-mito-prominence', type=float, default=None,
-              help='Maximum mito peak prominence (post-pair filter).')
-@click.option('--min-target-prominence', type=float, default=0.05, show_default=True,
-              help='Minimum target peak prominence (filter during ingestion).')
-@click.option('--max-target-prominence', type=float, default=None,
-              help='Maximum target peak prominence (post-pair filter).')
-@click.option('--bin-width', type=float, default=1.0, show_default=True,
-              help='Histogram bin width (px).')
-@click.option('--max-abs-distance', type=float, default=0.0, show_default=True,
-              help='Histogram x-axis cap |x| <= this. 0 = auto from data (p99).')
-@click.option('--recursive/--no-recursive', default=False,
-              help='Recurse into subdirectories of --csv-directory.')
-def main(csv_directory, input_pattern, output_directory, group_by_chars,
-         min_mito_intensity, max_mito_intensity,
-         min_target_intensity, max_target_intensity,
-         min_mito_prominence, max_mito_prominence,
-         min_target_prominence, max_target_prominence,
-         bin_width, max_abs_distance,
-         recursive):
-    """
-    Plot the offset between mitochondria peaks and protein/target peaks along
-    network_line_scan per-mito CSVs, grouped by image-name prefix.
-
-    Example:
-        python plot_peak_distance_analysis.py --csv-directory run1_output
-        python plot_peak_distance_analysis.py --csv-directory run1_output --group-by-chars 3
-        python plot_peak_distance_analysis.py --csv-directory run1_output \\
-            --min-mito-intensity 0.1 --min-target-intensity 0.1
-    """
-    analyze_peak_distances(
-        csv_directory,
-        input_pattern=input_pattern,
-        output_dir=output_directory,
-        group_by_chars=group_by_chars,
-        min_mito_intensity=min_mito_intensity,
-        max_mito_intensity=max_mito_intensity,
-        min_target_intensity=min_target_intensity,
-        max_target_intensity=max_target_intensity,
-        min_mito_prominence=min_mito_prominence,
-        max_mito_prominence=max_mito_prominence,
-        min_target_prominence=min_target_prominence,
-        max_target_prominence=max_target_prominence,
-        bin_width=bin_width,
-        max_abs_distance=max_abs_distance,
-        recursive=recursive,
-    )
-    print("\nDone!")
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
