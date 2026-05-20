@@ -51,3 +51,22 @@ network_line_scan:
   use_thickness_filter: false  # Filter skeleton by local thickness range
   min_thickness: 1.0  # Min local thickness to keep (px)
   max_thickness: 20.0  # Max local thickness to keep (px)
+  # --- Final binary mask export ---
+  binary_mask_dir_output: ''  # If set, write the final (thickness-filtered)
+                              # mito binary mask as
+                              # {basename}_mito_binary.tif (uint8 0/255) into
+                              # this directory. Empty = skip saving.
+
+# Peak-spacing histogram: pool every line-scan CSV in a directory, find
+# Scan_Intensity peaks with intensity + prominence thresholds, and plot a
+# histogram of consecutive peak-to-peak distances.
+peak_spacing_histogram:
+  input_dir: '20251021_decon_data/tiff/snap003run1'  # Directory of per-mito CSVs
+  input_pattern: '*_mito_*.csv'                      # Glob for CSV files
+  output_dir: ''                                     # Default: same as input_dir
+  peak_min_intensity: 0.3                            # Height threshold (0-1)
+  peak_min_prominence: 0.1                           # Prominence threshold (0-1)
+  peak_prominence_wlen: 10                           # peak_prominences wlen
+  bin_width: 5.0                                     # Histogram bin width (px)
+  max_distance: 0.0                                  # X-axis cap; 0 = auto (p99)
+  recursive: false                                   # Recurse into subdirs

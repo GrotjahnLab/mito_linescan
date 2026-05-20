@@ -843,14 +843,23 @@ def select_mask_gui(
     # If the user closed the window without clicking Done, still return the
     # latest computed mask (consistent with select_threshold_gui's behaviour).
     threshold_value = (state['otsu_t'] or 0.0) * state['sensitivity']
-    binary = (state['binary']
-              if state['binary'] is not None
-              else np.zeros_like(img, dtype=bool))
+    # The returned mito_binary is the *final* user-confirmed binary:
+    #   binary AND NOT excluded   when the thickness filter is on
+    #   binary                    otherwise
+    # This matches the filtered skeleton/graph that we also return — the
+    # caller gets a self-consistent (binary, skeleton, graph) triple.
+    binary_unfiltered = (state['binary']
+                         if state['binary'] is not None
+                         else np.zeros_like(img, dtype=bool))
+    if state.get('excluded') is not None:
+        binary_final = binary_unfiltered & ~state['excluded']
+    else:
+        binary_final = binary_unfiltered
     skel = (state['skel']
             if state['skel'] is not None
             else np.zeros_like(img, dtype=bool))
     graph = state['nx'] if state['nx'] is not None else nx.MultiGraph()
-    return float(threshold_value), binary, skel, graph
+    return float(threshold_value), binary_final, skel, graph
 
 
 def compute_mito_mask_noninteractive(
@@ -906,6 +915,7 @@ def compute_mito_mask_noninteractive(
 
     skel_full = _skel(bn, method='lee').astype(bool)
 
+    excluded = None
     if use_thickness_filter:
         thk = _local_thickness_2d(bn)
         if thk is not None:
@@ -913,11 +923,13 @@ def compute_mito_mask_noninteractive(
             if lo > hi:
                 lo, hi = hi, lo
             excluded = bn & ((thk < lo) | (thk > hi))
-            skel = skel_full & ~excluded
-        else:
-            skel = skel_full
+
+    if excluded is not None:
+        skel = skel_full & ~excluded
+        bn_final = bn & ~excluded
     else:
         skel = skel_full
+        bn_final = bn
 
     try:
         graph = sknw.build_sknw(skel.astype(np.uint8), multi=True)
@@ -925,7 +937,9 @@ def compute_mito_mask_noninteractive(
         print(f"  [compute_mito_mask_noninteractive] sknw failed: {exc}")
         graph = nx.MultiGraph()
 
-    return float(thr), bn, skel, graph
+    # Return the *final* (thickness-filtered) binary so it's self-consistent
+    # with the filtered skeleton/graph.
+    return float(thr), bn_final, skel, graph
 
 
 def process_images(
@@ -947,12 +961,18 @@ def process_images(
     use_thickness_filter=False,
     min_thickness=1.0,
     max_thickness=20.0,
+    binary_mask_dir_output='',
 ):
     """Main processing function for analyzing mitochondrial networks."""
-    
+
     # Create output directory if needed
     if not os.path.exists(mask_dir_output):
         os.makedirs(mask_dir_output)
+    # Optional output directory for the *final* mito binary mask (the user-
+    # confirmed binary with thickness-excluded regions removed). When empty,
+    # the binary mask is not written.
+    if binary_mask_dir_output and not os.path.exists(binary_mask_dir_output):
+        os.makedirs(binary_mask_dir_output)
     
     # Get colormaps
     mito_cmap, scan_cmap = get_colormaps()
@@ -1031,6 +1051,19 @@ def process_images(
             binarization_threshold, mito_binary, mito_skeleton, mito_nx = \
                 compute_mito_mask_noninteractive(mito_img_eq, **pipeline_kwargs)
             click.echo(f"Computed ridge threshold (no-gui): {binarization_threshold:.3f}")
+
+        # Optionally save the final mito binary mask (post-thickness-filter)
+        # so the user can reuse it in downstream workflows. We save uint8 0/255
+        # which is the most portable form for a binary mask.
+        if binary_mask_dir_output:
+            mito_binary_uint8 = (np.asarray(mito_binary, dtype=bool)
+                                 .astype(np.uint8) * 255)
+            binary_out_path = os.path.join(
+                binary_mask_dir_output, f"{basename}_mito_binary.tif"
+            )
+            tf.imwrite(binary_out_path, mito_binary_uint8,
+                       photometric='minisblack')
+            click.echo(f"Wrote final mito binary mask: {binary_out_path}")
 
         nodes = mito_nx.nodes()
         pos = np.array([[nodes[i]['o'][1], nodes[i]['o'][0]] for i in nodes])
@@ -1204,10 +1237,16 @@ def process_images(
               help='Maximum allowed local thickness (px) for skeleton pixels. '
                    'Pixels with thickness above this (e.g. bright clumps) '
                    'are dropped from the skeleton (not from the binary).')
+# --- Final-binary export ---
+@click.option('--binary-mask-dir-output', default='', type=str,
+              help='Directory to write the final mito binary mask '
+                   '(post-thickness-filter) as `{basename}_mito_binary.tif` '
+                   '(uint8, 0/255). Leave empty to skip saving.')
 def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
          mito_channel, protein_channel, use_gui, scan_width, path_sampling,
          min_path_length, tubule_radius, sensitivity, min_object_size,
-         gap_closing, use_thickness_filter, min_thickness, max_thickness):
+         gap_closing, use_thickness_filter, min_thickness, max_thickness,
+         binary_mask_dir_output):
     """
     Analyze mitochondrial networks and protein distribution in fluorescence microscopy images.
 
@@ -1237,6 +1276,7 @@ def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
         use_thickness_filter=use_thickness_filter,
         min_thickness=min_thickness,
         max_thickness=max_thickness,
+        binary_mask_dir_output=binary_mask_dir_output,
     )
     
     click.echo("Processing complete!")

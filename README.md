@@ -155,6 +155,11 @@ network_line_scan:
   use_thickness_filter: false              # Toggle local-thickness filtering
   min_thickness: 1.0                       # Keep skeleton px with thickness >=
   max_thickness: 20.0                      # Keep skeleton px with thickness <=
+  # --- Final binary mask export (reusable downstream) ---
+  binary_mask_dir_output: ''               # If set, save the final (post-
+                                           # thickness-filter) mito binary as
+                                           # {basename}_mito_binary.tif
+                                           # (uint8 0/255). Empty = skip.
 ```
 
 ##### Interactive mask GUI
@@ -202,6 +207,33 @@ analyze_omm_scans:
   peak_prominence: 0.1                     # Peak prominence threshold (0.0-1.0)
 ```
 
+#### **peak_spacing_histogram** - Inter-Peak Spacing on the Network
+Pool every per-mito CSV produced by `network_line_scan`, detect peaks on the
+`Scan_Intensity` column with intensity + prominence thresholds, and write a
+histogram of the **consecutive** peak-to-peak distances. Outputs are written
+into `output_dir` (defaults to `input_dir`):
+
+- `peak_spacing_histogram.png` — pooled histogram with median + mean overlays
+- `peak_spacings.csv` — one row per spacing, with `image_name`, `mito_id`, `spacing`
+- `peak_spacing_per_track.csv` — per-track summary (n_peaks, path_length, mean/median spacing)
+- `peak_spacing_summary.txt` — global stats
+
+```yaml
+peak_spacing_histogram:
+  input_dir: '/path/to/line_scan/output_dir/'  # Where the per-mito CSVs live
+  input_pattern: '*_mito_*.csv'                # Glob for the CSV files
+  output_dir: ''                               # Default: same as input_dir
+  peak_min_intensity: 0.3                      # Min Scan_Intensity (0-1)
+  peak_min_prominence: 0.1                     # Min prominence (0-1)
+  peak_prominence_wlen: 10                     # peak_prominences wlen
+  bin_width: 5.0                               # Histogram bin width (px)
+  max_distance: 0.0                            # X-axis cap; 0 = auto (data p99)
+  recursive: false                             # Recurse into subdirectories
+```
+
+Distances are reported in whatever units the CSV's `Distance` column is in
+(pixels, by default).
+
 ### 3. Run Workflows
 
 Execute any workflow using the unified command with the config file:
@@ -212,6 +244,7 @@ mito_protein_localization --config config.yaml refine_mask
 mito_protein_localization --config config.yaml omm_normal_scan
 mito_protein_localization --config config.yaml network_line_scan
 mito_protein_localization --config config.yaml analyze_omm_scans
+mito_protein_localization --config config.yaml peak_spacing_histogram
 ```
 
 Or run all workflows in sequence:
@@ -321,6 +354,12 @@ Output structure depends on which workflow you run:
 ├── {image_name}_mito_1_intensities.png  # Visualization with path overlay
 ├── {image_name}_mito_2.csv
 ├── {image_name}_mito_2_intensities.png
+└── ...
+
+binary_mask_dir_output/           # (optional, only if configured)
+├── {image_name}_mito_binary.tif  # Final mito binary mask (uint8, 0/255),
+│                                 # post-thickness-filter; ready to be reused
+│                                 # as input to other workflows.
 └── ...
 ```
 
