@@ -162,42 +162,43 @@ def build_scan_data_from_line_scan_dir(csv_directory, input_pattern,
     return pd.DataFrame(rows)
 
 
-def identify_outliers(df):
+def identify_outliers(df, column='peak_distance'):
     """
-    Identify outliers in peak_distance_diff for each group using the IQR method.
-    
+    IQR-based outlier detection on `column`, per group.
+
     Args:
-        df: DataFrame with 'group', 'peak_distance_diff', and 'image_name' columns
-        
+        df: DataFrame with 'group', the chosen `column`, and 'image_name' columns
+        column: name of the numeric column to scan for outliers
+
     Returns:
-        List of tuples: (group, image_name, peak_distance_diff)
+        List of dicts with group, image_name, value, lower_bound, upper_bound.
     """
     outliers = []
-    
+
     groups = sorted(df['group'].unique())
     for group in groups:
         group_data = df[df['group'] == group]
-        values = group_data['peak_distance_diff']
-        
+        values = group_data[column]
+
         Q1 = values.quantile(0.25)
         Q3 = values.quantile(0.75)
         IQR = Q3 - Q1
-        
+
         lower_bound = Q1 - 1.5 * IQR
         upper_bound = Q3 + 1.5 * IQR
-        
-        group_outliers = group_data[(group_data['peak_distance_diff'] < lower_bound) | 
-                                     (group_data['peak_distance_diff'] > upper_bound)]
-        
+
+        group_outliers = group_data[(group_data[column] < lower_bound) |
+                                    (group_data[column] > upper_bound)]
+
         for _, row in group_outliers.iterrows():
             outliers.append({
                 'group': group,
                 'image_name': row['image_name'],
-                'peak_distance_diff': row['peak_distance_diff'],
+                column: row[column],
                 'lower_bound': lower_bound,
-                'upper_bound': upper_bound
+                'upper_bound': upper_bound,
             })
-    
+
     return outliers
 
 
@@ -268,8 +269,15 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
     # Extract the specified number of characters from image_name as group
     df['group'] = df['image_name'].str[:group_by_chars]
 
-    # Calculate the difference between mito_peak_distance and target_peak_distance
-    df['peak_distance_diff'] = df['mito_peak_distance'] - df['target_peak_distance']
+    # Absolute distance between the paired mito peak and protein/target peak,
+    # in pixels along the path. We deliberately take the absolute value: the
+    # sign of (mito - target) on a line scan just reflects which direction
+    # the path happened to be traced, so it has no biological meaning here.
+    # (Carrying a signed difference was an OMM-scan convention that does not
+    # transfer to the network line scan output.)
+    df['peak_distance'] = np.abs(
+        df['mito_peak_distance'] - df['target_peak_distance']
+    )
 
     # Persist the assembled scan_data for downstream inspection.
     scan_data_path = os.path.join(output_dir, 'scan_data.csv')
@@ -277,19 +285,19 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
     print(f"Saved assembled scan_data.csv: {scan_data_path}")
 
     print(f"Groups: {df['group'].unique()}")
-    print(f"\nSummary statistics:")
-    print(df.groupby('group')['peak_distance_diff'].describe())
-    
-    # Identify and print outliers
-    outliers = identify_outliers(df)
+    print(f"\nSummary statistics (peak_distance, px):")
+    print(df.groupby('group')['peak_distance'].describe())
+
+    # Identify and print outliers (on the absolute distance)
+    outliers = identify_outliers(df, column='peak_distance')
     if outliers:
         print(f"\n\nOUTLIERS DETECTED ({len(outliers)} total):")
         print("-" * 80)
         for outlier in outliers:
             print(f"Group: {outlier['group']:5s} | Image: {outlier['image_name']:40s} | "
-                  f"Value: {outlier['peak_distance_diff']:8.2f} | "
+                  f"Value: {outlier['peak_distance']:8.2f} | "
                   f"Bounds: [{outlier['lower_bound']:.2f}, {outlier['upper_bound']:.2f}]")
-        
+
         # Save outliers to CSV file
         outliers_df = pd.DataFrame(outliers)
         outliers_file = os.path.join(output_dir, 'peak_distance_outliers.csv')
@@ -299,35 +307,34 @@ def analyze_peak_distances(csv_directory, input_pattern=DEFAULT_INPUT_PATTERN,
         print("\nNo outliers detected.")
 
 
-    # Histogram of (mito_peak_distance - target_peak_distance), pooled across
-    # all paired peaks. Median + mean overlaid. The x-axis cap defaults to the
-    # data's p99 unless caller pinned it via `max_abs_distance`.
-    vals = df['peak_distance_diff'].to_numpy(dtype=float)
+    # Histogram of |mito_peak_distance - target_peak_distance|, pooled across
+    # all paired peaks. Median + mean overlaid. The x-axis cap defaults to
+    # the data's p99 unless the caller pinned it via `max_abs_distance`.
+    vals = df['peak_distance'].to_numpy(dtype=float)   # already >= 0
     if max_abs_distance and max_abs_distance > 0:
         upper = float(max_abs_distance)
     else:
-        upper = float(np.percentile(np.abs(vals), 99))
+        upper = float(np.percentile(vals, 99))
     upper = max(upper, float(bin_width))
-    bins = np.arange(-upper, upper + bin_width, bin_width)
+    bins = np.arange(0.0, upper + bin_width, bin_width)
 
-    clipped = vals[(vals >= -upper) & (vals <= upper)]
+    clipped = vals[vals <= upper]
     n_clipped = vals.size - clipped.size
 
     fig, ax = plt.subplots(figsize=(9, 5.5))
     ax.hist(clipped, bins=bins, edgecolor='black', alpha=0.85)
-    ax.axvline(0, color='red', linestyle='--', linewidth=1.5,
-               label='mito = target (offset 0)')
-    ax.axvline(float(np.median(vals)), color='orange', linestyle=':',
+    ax.axvline(float(np.median(vals)), color='red', linestyle='--',
                linewidth=1.5, label=f'median = {np.median(vals):.2f}')
-    ax.axvline(float(vals.mean()), color='green', linestyle=':',
+    ax.axvline(float(vals.mean()), color='orange', linestyle=':',
                linewidth=1.5, label=f'mean = {vals.mean():.2f}')
-    ax.set_xlabel('Mito peak distance - Target peak distance (px)')
+    ax.set_xlabel('|Mito peak − Target peak| distance along path (px)')
     ax.set_ylabel('Count')
-    title = (f'Mito vs target peak offset  (n={vals.size} paired peaks from '
+    title = (f'Mito-to-target peak distance  (n={vals.size} paired peaks from '
              f"{df['mito_id'].nunique()} tracks, {df['image_name'].nunique()} images)")
     if n_clipped:
-        title += f'  ·  {n_clipped} values |x| > {upper:.1f} not shown'
+        title += f'  ·  {n_clipped} values > {upper:.1f} px not shown'
     ax.set_title(title)
+    ax.set_xlim(0, upper)
     ax.legend()
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
