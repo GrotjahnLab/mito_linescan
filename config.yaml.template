@@ -78,3 +78,25 @@ peak_spacing_histogram:
   bin_width: 5.0                               # Histogram bin width (px)
   max_distance: 0.0                            # X-axis cap; 0 = auto (data p99)
   recursive: false                             # Recurse into subdirectories
+
+# Plot peak distance analysis: box/violin plots of the OFFSET between mito
+# peaks and target/protein peaks per mitochondrial path, ingested from a
+# directory of network_line_scan per-mito CSVs (columns: Distance,
+# Mito_Intensity, Scan_Intensity). For each protein peak, the nearest mito
+# peak is paired and (mito_peak_distance - target_peak_distance) is plotted.
+# Different from peak_spacing_histogram, which measures consecutive protein
+# peak spacings within a single channel.
+plot_peak_distance_analysis:
+  csv_directory: '/path/to/line_scan/output_dir/'  # Directory of per-mito CSVs
+  input_pattern: '*_mito_*.csv'                # Glob within --csv-directory
+  output_directory: ''                         # Default: same as csv_directory
+  group_by_chars: 5                            # Group images by first N chars
+  min_mito_intensity: 0.3                      # Min mito peak intensity (ingestion)
+  max_mito_intensity: null                     # Max mito peak intensity (post-pair)
+  min_target_intensity: 0.2                    # Min target peak intensity (ingestion)
+  max_target_intensity: null                   # Max target peak intensity (post-pair)
+  min_mito_prominence: 0.08                    # Min mito peak prominence (ingestion)
+  max_mito_prominence: null                    # Max mito peak prominence (post-pair)
+  min_target_prominence: 0.05                  # Min target peak prominence (ingestion)
+  max_target_prominence: null                  # Max target peak prominence (post-pair)
+  recursive: false                             # Recurse into subdirectories
