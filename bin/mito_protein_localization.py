@@ -55,83 +55,23 @@ def config_to_args(config_dict):
     return args
 
 
-CONFIG_TEMPLATE = """# Mito Location Configuration File
-# Configure the parameters for different mitochondrial analysis workflows
-
-# Draw mask: Interactive mask drawing for mitochondrial structures
-draw_mask:
-  input_directory: '/path/to/input/directory'  # Input directory with TIFF images
-  manual_mask_directory: '/path/to/output/directory'  # Output directory for manually drawn masks (optional, defaults to input directory)
-  mito_channel: 0  # Channel index for mitochondria (0-based)
-  target_channel: 1  # Channel index for target/scan signal (0-based)
-  scan_width: 7  # Width of scan lines in pixels
-  sampling_radius: 3  # Radius for weighted average sampling in pixels
-  outliers_csv: ''  # Path to outliers CSV from plot_peak_distance_analysis (optional, only process outlier images)
-
-# Mask refine: Refine mask edges using intensity information
-refine_mask:
-  input_directory: '/path/to/input/directory'  # Input directory with mask images
-  refined_mask_directory: '/path/to/output/directory'  # Output directory for refined masks
-  mask_channel: 0  # Channel index for mask (0-based)
-  mito_channel: 1  # Channel index for mitochondria (0-based)
-  target_channel: 2  # Channel index for target/scan signal (0-based)
-
-# OMM Normal Scan: Scan protein on outer mitochondrial membrane using surface normals
-omm_normal_scan:
-  input_directory: '/path/to/images/'  # Input directory with TIFF images
-  output_directory: '/path/to/output/'  # Output directory
-  mito_channel: 1  # Mitochondria channel index (0-based)
-  scan_channel: 0  # Scan/protein channel index (0-based)
-  mask_channel: 2  # Mask channel index (0-based)
-  scan_width: 7  # Width of scan lines in pixels
-  sampling_radius: 3  # Radius for weighted average sampling in pixels
-  mito_thickness_threshold: 1  # Initial erosion value for mask (1-20)
-
-# Line scan: Scan protein distribution along mitochondrial network
-network_line_scan:
-  input_dir: '20251021_decon_data/tiff'  # Input directory containing TIFF images
-  input_pattern: 'snap*.tiff'  # Pattern to match input TIFF files
-  mask_dir_output: '20251021_decon_data/tiff/masks'  # Output directory for masks
-  mask_dir_input: '20251021_decon_data/tiff/masks/'  # Input directory for existing masks
-  run_name: 'run1'  # Run name suffix for output directories
-  mito_channel: 0  # 0-based index for mitochondria channel
-  protein_channel: 2  # 0-based index for protein channel
-  use_gui: true  # Use interactive GUI for mask selection
-  scan_width: 4  # Pixels on each side of the path for scanning
-  path_sampling: 5  # Number of subpixel samples along the normal
-  min_path_length: 30  # Minimum path length to process
-  # --- Ridge-filter mask pipeline (also live-tunable in the GUI) ---
-  tubule_radius: 2.0  # Mito tubule radius in px (drives top-hat + ridge sigmas)
-  sensitivity: 1.0  # Multiplier on Otsu cut of ridge response (1.0=Otsu)
-  min_object_size: 30  # Drop binary connected components smaller than this (px)
-  gap_closing: 1  # Binary closing disk radius (px) to bridge small breaks
-  # --- Local-thickness filter (applied AFTER skeletonization, requires
-  #     the `localthickness` PyPI package) ---
-  use_thickness_filter: false  # Filter skeleton by local thickness range
-  min_thickness: 1.0  # Min local thickness to keep (px)
-  max_thickness: 20.0  # Max local thickness to keep (px)
-
-# Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
-analyze_omm_scans:
-  input_directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
-  output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
-  peak_threshold: 0.3  # Minimum intensity threshold for peaks
-  peak_prominence: 0.1  # Minimum prominence threshold for peaks
-
-# Plot peak distance analysis: Create box and violin plots of peak distance differences
-plot_peak_distance_analysis:
-  csv_file: '/path/to/scan_data.csv'  # Path to scan_data.csv file from OMM analysis
-  output_directory: '/path/to/output/'  # Output directory for plots and outliers CSV (optional, defaults to same as CSV)
-  group_by_chars: 5  # Number of starting characters of image_name to use for grouping
-  min_mito_intensity: 0.3  # Minimum mito peak intensity threshold
-  max_mito_intensity: null  # Maximum mito peak intensity threshold (null = no limit)
-  min_target_intensity: 0.2  # Minimum target peak intensity threshold
-  max_target_intensity: null  # Maximum target peak intensity threshold (null = no limit)
-  min_mito_prominence: 0.08  # Minimum mito peak prominence threshold
-  max_mito_prominence: null  # Maximum mito peak prominence threshold (null = no limit)
-  min_target_prominence: 0.05  # Minimum target peak prominence threshold
-  max_target_prominence: null  # Maximum target peak prominence threshold (null = no limit)
-"""
+# --- Default config template ----------------------------------------------
+# The on-disk `config.yaml.template` at the project root is the single source
+# of truth for the default config layout. We read it at module import time
+# so `create-config` always reflects the latest options without anyone having
+# to maintain a parallel hardcoded copy here. If the file is missing (e.g.
+# when running from a pip-installed wheel that didn't bundle the template),
+# fall back to a minimal stub that tells the user where to fetch it.
+_TEMPLATE_PATH = Path(__file__).resolve().parent.parent / 'config.yaml.template'
+try:
+    CONFIG_TEMPLATE = _TEMPLATE_PATH.read_text()
+except OSError:
+    CONFIG_TEMPLATE = (
+        "# config.yaml.template was not bundled with this install.\n"
+        "# Fetch it from the project repository:\n"
+        "#   https://github.com/GrotjahnLab/mito_linescan/blob/main/config.yaml.template\n"
+        "# and place it next to your config.yaml before re-running create-config.\n"
+    )
 
 
 @click.group()
