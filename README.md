@@ -235,6 +235,55 @@ plot_peak_distance_analysis:
 Distances are reported in whatever units the CSV's `Distance` column is in
 (pixels, by default).
 
+#### **sted_colocalization_3d** - 3D STED mtDNA / mito / septin Analysis
+Full 3D analysis pipeline for multi-channel STED stacks (default channel
+ordering `0=mtDNA, 1=mito, 2=septin`). Per image, builds 3D binary masks from
+percentile thresholds, computes the original Area1 (within K voxels of
+mtDNA, inside mito) vs Area2 (mito, away from mtDNA) septin intensity
+analysis, and on top of that produces a **per-nucleoid 3D radial intensity
+profile** in all three channels using spherical shells out to a configurable
+voxel radius. mtDNA "nucleoids" are connected components of the 3D mtDNA
+binary mask, filtered by a minimum voxel count.
+
+Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
+- `{basename}_{septin|mito|mtDNA}.mrc` — single-channel float32 MRC exports
+- `{basename}_analysis.png` — 2×3 central-slice visualization
+- `{basename}_histogram.png` — per-channel intensity histogram (log y)
+- `{basename}_radial_profiles.csv` — long-format `image_name, nucleoid_id, z,
+  y, x, on_mito, distance, mtdna_intensity, mito_intensity, septin_intensity`
+
+Pooled outputs (in `{output_dir}/`):
+- `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios
+- `septin_ratios_boxplot_<thr>_<dilation>.png` — Area1/mito vs Area2/mito
+- `puncta_radial_profiles_pooled.csv` — every per-image radial CSV pooled
+- `puncta_radial_profiles.png` — three-panel mean ± SEM plot (mtDNA / mito /
+  septin)
+
+```yaml
+sted_colocalization_3d:
+  input_dir: '/path/to/3d/sted/data/'
+  input_pattern: '*.tif'
+  output_dir: ''                       # Default: same as input_dir
+  run_name: 'run1'
+  mtdna_channel: 0
+  mito_channel: 1
+  protein_channel: 2
+  mito_threshold_percentile: 30        # Percentile of nonzero mito voxels
+  mito_dilation: 3                     # Binary-dilation iterations
+  mtdna_threshold_percentile: 99
+  mtdna_dilation: 3                    # Area1 = dilated mtDNA ∩ mito
+  septin_threshold_percentile: 95      # For stats reporting
+  punct_scan_radius: 20                # Radial profile radius (voxels)
+  min_nucleoid_voxels: 5               # Drop tiny mtDNA components
+  save_channel_mrcs: true
+  save_analysis_png: true
+  save_histogram_png: true
+```
+
+Distances in the radial CSV are in voxels and assume isotropic spacing. For
+anisotropic acquisitions, scale the `distance` column by the appropriate
+factor offline.
+
 ### 3. Run Workflows
 
 Execute any workflow using the unified command with the config file:
@@ -246,6 +295,7 @@ mito_protein_localization --config config.yaml omm_normal_scan
 mito_protein_localization --config config.yaml network_line_scan
 mito_protein_localization --config config.yaml analyze_omm_scans
 mito_protein_localization --config config.yaml plot_peak_distance_analysis
+mito_protein_localization --config config.yaml sted_colocalization_3d
 ```
 
 Or run all workflows in sequence:

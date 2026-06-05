@@ -282,6 +282,33 @@ def puncta_nn_scan(ctx, config):
 @cli.command()
 @click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
 @click.pass_context
+def sted_colocalization_3d(ctx, config):
+    """3D STED colocalization analysis: mito/mtDNA/septin masks + Area1/Area2
+    septin densities + per-nucleoid 3D radial intensity profiles
+    (sted_colocalization_3d.py)."""
+    config_file = config
+    if not config_file:
+        raise click.ClickException("--config option is required")
+
+    config_data = load_config(config_file)
+    if 'sted_colocalization_3d' not in config_data:
+        raise click.ClickException("'sted_colocalization_3d' section not found in config.yaml")
+
+    sted_config = config_data['sted_colocalization_3d']
+    args = config_to_args(sted_config)
+
+    click.echo(f"Running sted_colocalization_3d with config: {sted_config}")
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.sted_colocalization_3d import main as sted_3d_main
+
+    sys.argv = ['sted_colocalization_3d'] + args
+    sted_3d_main(standalone_mode=False)
+
+
+@cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
+@click.pass_context
 def plot_peak_distance_analysis(ctx, config):
     """Plot peak distance analysis with outlier detection (plot_peak_distance_analysis.py)."""
     config_file = config

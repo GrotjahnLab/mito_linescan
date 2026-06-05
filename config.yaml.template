@@ -118,6 +118,37 @@ puncta_nn_scan:
   # --- Outputs ---
   save_overlay: true                 # Per-image overlay PNG
 
+# STED colocalization 3D: full 3D mito/mtDNA/septin analysis.
+# Builds 3D binary masks (percentile + dilation) for each channel, computes
+# Area1 (within K voxels of mtDNA, inside mito) and Area2 (mito, away from
+# mtDNA), reports per-area septin intensities and ratios. Additionally, for
+# each mtDNA-nucleoid connected component, computes a 3D radial intensity
+# profile (spherical shells) in mtDNA / mito / septin channels.
+sted_colocalization_3d:
+  input_dir: '/path/to/3d/sted/data/'  # 3D multi-channel TIFFs
+  input_pattern: '*.tif'               # Glob pattern
+  output_dir: ''                       # Default: same as input_dir
+  run_name: 'run1'                     # Per-image output dir suffix
+  # 3D STED file channel ordering (default: 0=mtDNA, 1=mito, 2=septin)
+  mtdna_channel: 0
+  mito_channel: 1
+  protein_channel: 2
+  # 3D mito mask: threshold at Pth percentile of nonzero mito voxels + dilate
+  mito_threshold_percentile: 30
+  mito_dilation: 3
+  # mtDNA mask + Area1 dilation
+  mtdna_threshold_percentile: 99
+  mtdna_dilation: 3
+  # Septin mask threshold (used for stats reporting)
+  septin_threshold_percentile: 95
+  # 3D radial intensity profile around mtDNA nucleoid centroids
+  punct_scan_radius: 20                # Profile radius (voxels, isotropic)
+  min_nucleoid_voxels: 5               # Drop tiny mtDNA components
+  # Output toggles
+  save_channel_mrcs: true              # Per-channel float32 MRC exports
+  save_analysis_png: true              # 2x3 central-slice visualization
+  save_histogram_png: true             # Per-channel intensity histogram
+
 # Plot peak distance analysis: pool every per-mito CSV from network_line_scan,
 # detect peaks on Scan_Intensity (the target/protein channel) with min
 # intensity + min prominence, compute the distance between consecutive peaks
