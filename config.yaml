@@ -64,6 +64,58 @@ analyze_omm_scans:
   peak_threshold: 0.3
   peak_prominence: 0.1
 
+# Puncta NN scan: detect puncta in the protein channel, classify each as on
+# or off the mito binary mask, and compute nearest-neighbor distances both
+# within-group (on->on, off->off) and all-to-all (on->any, off->any). Per-image
+# puncta CSV + overlay PNG; pooled CSV + histogram + summary with Mann-Whitney
+# U / KS comparisons.
+puncta_nn_scan:
+  input_dir: '../examples/'          # Input directory with multi-channel TIFFs
+  input_pattern: '*.tif'             # Glob within input_dir
+  output_dir: ''                     # Default: same as input_dir
+  run_name: 'run1'                   # Suffix on per-image output directories
+  mito_channel: 0                    # 0-based mito channel index
+  protein_channel: 2                 # 0-based protein/septin channel index
+  mtdna_channel: 0                   # 0-based mtDNA channel for the radial
+                                     # intensity profile. Defaults to same as
+                                     # mito_channel; change to a dedicated
+                                     # mtDNA-stain channel (e.g. PicoGreen) if
+                                     # you have one.
+  # --- Mito binary mask source (dual-purpose). If the file exists we load
+  #     and skip mask-making; otherwise we run the SAME mask-making flow as
+  #     network_line_scan (lasso ROI -> ridge-filter GUI/no-GUI) and SAVE the
+  #     result back into this directory so the next run reuses it. ---
+  mito_binary_dir: '../examples/'    # Load/save dir for `{basename}_mito_binary.tif`
+  mask_dir_input: ''                 # Pre-saved lasso cell ROIs (optional)
+  mask_dir_output: ''                # Where freshly drawn ROIs get saved
+  use_gui: true                      # Interactive ridge-filter mask GUI when
+                                     # the binary isn't found on disk
+  # --- Ridge-filter mask pipeline (mirrors network_line_scan) ---
+  tubule_radius: 2.0
+  sensitivity: 1.0
+  min_object_size: 30
+  gap_closing: 1
+  use_thickness_filter: false
+  min_thickness: 1.0
+  max_thickness: 20.0
+  # --- Puncta detection (local maxima + threshold) ---
+  punct_use_gui: true                # Interactive sliders GUI for puncta
+                                     # detection (recomputes peaks live).
+                                     # Falls back to headless detect_puncta
+                                     # when false.
+  punct_blur_sigma: 1.0              # Gaussian smoothing sigma (px); 0 = off
+  punct_min_distance: 3              # Min separation (px) between peaks
+  punct_threshold_abs: 0.0           # Abs threshold on normalized [0,1] image
+  punct_threshold_rel: 0.2           # Relative threshold (fraction of max)
+  punct_exclude_border: 1            # Edge pixels to skip
+  # --- Radial intensity profile around each punctum ---
+  # For every detected punctum, sample mean intensity in concentric integer-
+  # distance rings (0..R px) in BOTH the mtDNA and protein/septin channels.
+  # Writes a per-image long-format CSV plus pooled CSV + mean ± SEM plot.
+  punct_scan_radius: 20              # Profile radius (px) per punctum
+  # --- Outputs ---
+  save_overlay: true                 # Per-image overlay PNG
+
 # Plot peak distance analysis: pool every per-mito CSV from network_line_scan,
 # detect peaks on Scan_Intensity with min intensity + min prominence, compute
 # the distance between consecutive peaks within each track, and histogram all

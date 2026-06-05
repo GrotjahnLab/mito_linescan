@@ -256,6 +256,32 @@ def analyze_omm_scans(ctx, config):
 @cli.command()
 @click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
 @click.pass_context
+def puncta_nn_scan(ctx, config):
+    """Detect puncta in the protein channel and compare nearest-neighbor
+    distances on vs off the mitochondrial network (puncta_nn_scan.py)."""
+    config_file = config
+    if not config_file:
+        raise click.ClickException("--config option is required")
+
+    config_data = load_config(config_file)
+    if 'puncta_nn_scan' not in config_data:
+        raise click.ClickException("'puncta_nn_scan' section not found in config.yaml")
+
+    puncta_nn_scan_config = config_data['puncta_nn_scan']
+    args = config_to_args(puncta_nn_scan_config)
+
+    click.echo(f"Running puncta_nn_scan with config: {puncta_nn_scan_config}")
+
+    # Lazy import: only load the heavy workflow when this command runs.
+    from bin.puncta_nn_scan import main as puncta_nn_scan_main
+
+    sys.argv = ['puncta_nn_scan'] + args
+    puncta_nn_scan_main(standalone_mode=False)
+
+
+@cli.command()
+@click.option('--config', type=click.Path(exists=True), required=True, help='Path to config.yaml file')
+@click.pass_context
 def plot_peak_distance_analysis(ctx, config):
     """Plot peak distance analysis with outlier detection (plot_peak_distance_analysis.py)."""
     config_file = config
