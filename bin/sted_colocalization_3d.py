@@ -38,6 +38,10 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        z, y, x, on_mito, distance,
                                        mtdna_intensity, mito_intensity,
                                        septin_intensity
+  {basename}_radial_profiles.png       per-image 3-panel mean ± SEM plot
+                                       (mtDNA / mito / septin), same render
+                                       as the pooled plot but over this
+                                       image's nucleoids only
 
 Pooled outputs (in {output_dir}/):
   analysis_results.csv                 per-image Area1/Area2/ratio summary
@@ -639,6 +643,19 @@ def process_one_image_3d(
         radial_df.to_csv(radial_csv, index=False)
         click.echo(f"  wrote radial profiles ({len(radial_df)} rows) -> "
                    f"{os.path.basename(radial_csv)}")
+
+        # Per-image radial profile PNG. Reuses the same render helper as the
+        # pooled output so the two plots are visually consistent — only the
+        # underlying DataFrame differs (one image vs all images).
+        try:
+            radial_png = os.path.join(image_out_dir,
+                                       f"{basename}_radial_profiles.png")
+            render_radial_profiles_png(radial_png, radial_df,
+                                        int(punct_scan_radius))
+            click.echo(f"  wrote per-image radial profile plot -> "
+                       f"{os.path.basename(radial_png)}")
+        except Exception as exc:
+            click.echo(f"  per-image radial PNG render failed: {exc}")
 
     return area_row, radial_df
 

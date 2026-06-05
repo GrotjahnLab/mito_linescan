@@ -251,6 +251,9 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_histogram.png` — per-channel intensity histogram (log y)
 - `{basename}_radial_profiles.csv` — long-format `image_name, nucleoid_id, z,
   y, x, on_mito, distance, mtdna_intensity, mito_intensity, septin_intensity`
+- `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
+  (mtDNA / mito / septin) computed from this image's nucleoids only; same
+  visual style as the pooled plot below for easy comparison
 
 Pooled outputs (in `{output_dir}/`):
 - `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios
