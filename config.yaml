@@ -146,6 +146,8 @@ sted_colocalization_3d:
   save_channel_mrcs: true              # Per-channel float32 MRC exports
   save_analysis_png: true              # 2x3 central-slice visualization
   save_histogram_png: true             # Per-channel intensity histogram
+  save_per_nucleoid_png: true          # One radial-profile PNG per nucleoid
+                                       # in {basename}{run_name}/per_nucleoid/
 
 # Plot peak distance analysis: pool every per-mito CSV from network_line_scan,
 # detect peaks on Scan_Intensity with min intensity + min prominence, compute

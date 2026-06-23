@@ -1,0 +1,20 @@
+image: 20250924_SV40mef_0.1PFA_TOMM20_SEPT9_snap027_52.1494_decon_NaN.ome.tif
+run_name: run2
+channels:
+  mito_channel: 0
+  protein_channel: 2
+cell_mask:
+  source: directory
+scan:
+  scan_width: 4
+  path_sampling: 5
+  min_path_length: 30
+ridge_filter:
+  tubule_radius: 2.2
+  sensitivity: 0.6799999999999999
+  min_object_size: 30
+  gap_closing: 2
+  use_thickness_filter: false
+  min_thickness: 1.0
+  max_thickness: 20.0
+  ridge_threshold: 0.2616540610790252

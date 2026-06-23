@@ -254,6 +254,11 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
   (mtDNA / mito / septin) computed from this image's nucleoids only; same
   visual style as the pooled plot below for easy comparison
+- `per_nucleoid/nucleoid_{id:03d}_z{z}_y{y}_x{x}.png` — one 3-panel radial
+  profile plot per detected nucleoid (single-sample line plots, no error
+  band). Subdirectory keeps the per-image dir tidy for high-nucleoid images.
+  Disable with `save_per_nucleoid_png: false` if you don't want hundreds of
+  files.
 
 Pooled outputs (in `{output_dir}/`):
 - `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios
@@ -281,6 +286,7 @@ sted_colocalization_3d:
   save_channel_mrcs: true
   save_analysis_png: true
   save_histogram_png: true
+  save_per_nucleoid_png: true          # One PNG per detected nucleoid
 ```
 
 Distances in the radial CSV are in voxels and assume isotropic spacing. For

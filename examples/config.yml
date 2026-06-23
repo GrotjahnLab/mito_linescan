@@ -3,8 +3,8 @@
 
 # Draw mask: Interactive mask drawing for mitochondrial structures
 draw_mask:
-  input_directory: '/path/to/input/directory'  # Input directory with TIFF images
-  manual_mask_directory: '/path/to/output/directory'  # Output directory for manually drawn masks (optional, defaults to input directory)
+  input_directory: 'SEPT9_REPRESENTATIVE'  # Input directory with TIFF images
+  manual_mask_directory: 'SEPT9_REPRESENTATIVE/manual_masks'  # Output directory for manually drawn masks (optional, defaults to input directory)
   mito_channel: 0  # Channel index for mitochondria (0-based)
   target_channel: 1  # Channel index for target/scan signal (0-based)
   scan_width: 7  # Width of scan lines in pixels
@@ -12,30 +12,30 @@ draw_mask:
 
 # Mask refine: Refine mask edges using intensity information
 refine_mask:
-  input_directory: '/path/to/input/directory'  # Input directory with mask images
-  refined_mask_directory: '/path/to/output/directory'  # Output directory for refined masks
+  input_directory: 'SEPT9_REPRESENTATIVE'  # Input directory with mask images
+  refined_mask_directory: 'SEPT9_REPRESENTATIVE/refined_masks'  # Output directory for refined masks
   mask_channel: 0  # Channel index for mask (0-based)
   mito_channel: 1  # Channel index for mitochondria (0-based)
   target_channel: 2  # Channel index for target/scan signal (0-based)
 
 # OMM Normal Scan: Scan protein on outer mitochondrial membrane using surface normals
 omm_normal_scan:
-  input_directory: '/path/to/images/'  # Input directory with TIFF images
-  output_directory: '/path/to/output/'  # Output directory
+  input_directory: 'SEPT9_REPRESENTATIVE/manual_masks'  # Input directory with TIFF images
+  output_directory: 'SEPT9_REPRESENTATIVE/output'  # Output directory
   mito_channel: 1  # Mitochondria channel index (0-based)
-  scan_channel: 0  # Scan/protein channel index (0-based)
-  mask_channel: 2  # Mask channel index (0-based)
+  scan_channel: 2  # Scan/protein channel index (0-based)
+  mask_channel: 0  # Mask channel index (0-based)
   scan_width: 7  # Width of scan lines in pixels
   sampling_radius: 3  # Radius for weighted average sampling in pixels
   mito_thickness_threshold: 1  # Initial erosion value for mask (1-20)
 
 # Line scan: Scan protein distribution along mitochondrial network
 network_line_scan:
-  input_dir: '20251021_decon_data/tiff'  # Input directory containing TIFF images
-  input_pattern: 'snap*.tiff'  # Pattern to match input TIFF files
-  mask_dir_output: '20251021_decon_data/tiff/masks'  # Output directory for masks
-  mask_dir_input: '20251021_decon_data/tiff/masks/'  # Input directory for existing masks
-  run_name: 'run1'  # Run name suffix for output directories
+  input_dir: 'representative_cells'  # Input directory containing TIFF images
+  input_pattern: '*.tif'  # Pattern to match input TIFF files
+  mask_dir_output: 'representative_cells/masks'  # Output directory for masks
+  mask_dir_input: 'representative_cells/masks/'  # Input directory for existing masks
+  run_name: 'run2'  # Run name suffix for output directories
   mito_channel: 0  # 0-based index for mitochondria channel
   protein_channel: 2  # 0-based index for protein channel
   mask_channel: null  # 0-based index of channel to use as cell mask (Otsu threshold).
@@ -63,8 +63,8 @@ network_line_scan:
 
 # Analyze OMM scans: Analyze intensity profiles from OMM normal scan results
 analyze_omm_scans:
-  input_directory: '/path/to/pickle/files/'  # Directory containing pickle files from omm_normal_scan
-  output_directory: '/path/to/output/'  # Output directory for plots and CSV (optional, defaults to input directory)
+  input_directory: 'SEPT9_REPRESENTATIVE/output'  # Directory containing pickle files from omm_normal_scan
+  output_directory: 'SEPT9_REPRESENTATIVE/output'  # Output directory for plots and CSV (optional, defaults to input directory)
   peak_threshold: 0.3  # Minimum intensity threshold for peaks (0.0-1.0)
   peak_prominence: 0.1  # Minimum prominence threshold for peaks (0.0-1.0)
 
@@ -77,7 +77,7 @@ puncta_nn_scan:
   input_dir: '/path/to/images/'      # Input directory with multi-channel TIFFs
   input_pattern: '*.tif'             # Glob within input_dir
   output_dir: ''                     # Default: same as input_dir
-  run_name: 'run1'                   # Suffix on per-image output directories
+  run_name: 'run2'                   # Suffix on per-image output directories
   mito_channel: 0                    # 0-based mito channel index
   protein_channel: 2                 # 0-based protein/septin channel index
   mtdna_channel: 0                   # 0-based mtDNA channel for the radial
@@ -151,8 +151,6 @@ sted_colocalization_3d:
   save_channel_mrcs: true              # Per-channel float32 MRC exports
   save_analysis_png: true              # 2x3 central-slice visualization
   save_histogram_png: true             # Per-channel intensity histogram
-  save_per_nucleoid_png: true          # One radial-profile PNG per nucleoid
-                                       # in {basename}{run_name}/per_nucleoid/
 
 # Plot peak distance analysis: pool every per-mito CSV from network_line_scan,
 # detect peaks on Scan_Intensity (the target/protein channel) with min

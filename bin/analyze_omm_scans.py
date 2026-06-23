@@ -158,10 +158,13 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         target_std = np.std(target_interp_profiles, axis=0)
         mask_mean = np.mean(mask_interp_profiles, axis=0)
         mask_std = np.std(mask_interp_profiles, axis=0)
-        
+
+        # Common x-axis for mean curves: average of the per-profile shifted grids
+        mean_distances_shifted = np.mean(distances_shifted, axis=0)
+
         # Create cumulative plot
         fig, ax = plt.subplots(figsize=(8, 6))
-        
+
         # Plot individual profiles with low opacity
         for i,profile in enumerate(mito_interp_profiles):
             ax.plot(distances_shifted[i], profile, color='blue', alpha=0.1, linewidth=0.5)
@@ -170,12 +173,12 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         for i,profile in enumerate(mask_interp_profiles):
             ax.plot(distances_shifted[i], profile, color='orange', alpha=0.1, linewidth=0.5)
         # Plot mean with shaded error area
-        ax.plot(distance_grid, mito_mean, color='blue', linewidth=2, label='Mito Mean')
-        ax.fill_between(distance_grid, mito_mean - mito_std, mito_mean + mito_std, 
+        ax.plot(mean_distances_shifted, mito_mean, color='blue', linewidth=2, label='Mito Mean')
+        ax.fill_between(mean_distances_shifted, mito_mean - mito_std, mito_mean + mito_std,
                         color='blue', alpha=0.2, label='Mito ± 1 SD')
-        
-        ax.plot(distance_grid, target_mean, color='green', linewidth=2, label='Target Mean')
-        ax.fill_between(distance_grid, target_mean - target_std, target_mean + target_std, 
+
+        ax.plot(mean_distances_shifted, target_mean, color='green', linewidth=2, label='Target Mean')
+        ax.fill_between(mean_distances_shifted, target_mean - target_std, target_mean + target_std,
                         color='green', alpha=0.2, label='Target ± 1 SD')
 
         ax.axvline(x=0, color='black', linestyle='--', alpha=0.5, linewidth=1)

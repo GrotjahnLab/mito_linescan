@@ -42,6 +42,12 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        (mtDNA / mito / septin), same render
                                        as the pooled plot but over this
                                        image's nucleoids only
+  per_nucleoid/nucleoid_{id:03d}_z{z}_y{y}_x{x}.png
+                                       one 3-panel radial profile plot per
+                                       detected mtDNA nucleoid (no error
+                                       band — single sample); subdirectory
+                                       to keep the per-image dir tidy when
+                                       a single image has many nucleoids
 
 Pooled outputs (in {output_dir}/):
   analysis_results.csv                 per-image Area1/Area2/ratio summary
@@ -446,6 +452,36 @@ def render_ratios_boxplot(out_path, ratios_a1_mito, ratios_a2_mito):
     plt.close(fig)
 
 
+def render_single_nucleoid_radial(out_path, single_df, radius, label):
+    """3-panel mtDNA / mito / septin radial profile for ONE nucleoid.
+
+    Unlike the pooled/mean plot, this shows the raw radial profile of a
+    single mtDNA nucleoid: one line per channel with markers at each integer
+    distance bin. No error band because there's no variance over nucleoids
+    here (it's a single sample). Useful for spotting outlier nucleoids and
+    QC'ing individual profiles before pooling.
+    """
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.0))
+    panels = [
+        (axes[0], 'mtdna_intensity',  'mtDNA channel',  'tab:blue'),
+        (axes[1], 'mito_intensity',   'Mito channel',   'tab:green'),
+        (axes[2], 'septin_intensity', 'Septin channel', 'tab:red'),
+    ]
+    distances = single_df['distance'].values
+    for ax, col, title, color in panels:
+        ax.plot(distances, single_df[col].values,
+                color=color, linewidth=1.6, marker='o', markersize=3)
+        ax.set_xlabel('Distance from centroid (voxels)')
+        ax.set_ylabel('Intensity (normalized)')
+        ax.set_title(title)
+        ax.set_xlim(0, radius)
+        ax.grid(True, alpha=0.3)
+    fig.suptitle(f'Radial profile - {label}')
+    fig.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def render_radial_profiles_png(out_path, pooled_df, radius):
     """Three-panel mean ± SEM plot of mtDNA / mito / septin radial profiles.
 
@@ -503,6 +539,7 @@ def process_one_image_3d(
     save_channel_mrcs_flag,
     save_analysis_png_flag,
     save_histogram_png_flag,
+    save_per_nucleoid_png_flag,
 ):
     """Run the full 3D pipeline for one image and return:
        (area_summary_row, radial_df)
@@ -644,9 +681,9 @@ def process_one_image_3d(
         click.echo(f"  wrote radial profiles ({len(radial_df)} rows) -> "
                    f"{os.path.basename(radial_csv)}")
 
-        # Per-image radial profile PNG. Reuses the same render helper as the
-        # pooled output so the two plots are visually consistent — only the
-        # underlying DataFrame differs (one image vs all images).
+        # Per-image radial profile PNG (mean ± SEM across this image's
+        # nucleoids). Reuses the same render helper as the pooled output so
+        # the two plots are visually consistent.
         try:
             radial_png = os.path.join(image_out_dir,
                                        f"{basename}_radial_profiles.png")
@@ -656,6 +693,45 @@ def process_one_image_3d(
                        f"{os.path.basename(radial_png)}")
         except Exception as exc:
             click.echo(f"  per-image radial PNG render failed: {exc}")
+
+        # Per-nucleoid radial profile PNGs. One file per detected nucleoid,
+        # named with the centroid coordinates so individual nucleoids are
+        # easy to cross-reference with the CSV. Lives in a subdirectory so
+        # it doesn't clutter the per-image output dir for high-nucleoid
+        # counts.
+        if save_per_nucleoid_png_flag:
+            per_nuc_dir = os.path.join(image_out_dir, 'per_nucleoid')
+            os.makedirs(per_nuc_dir, exist_ok=True)
+            n_ok = 0
+            n_fail = 0
+            for nuc_id in radial_df['nucleoid_id'].unique():
+                sub = radial_df[radial_df['nucleoid_id'] == nuc_id]
+                if sub.empty:
+                    continue
+                z = int(sub['z'].iloc[0])
+                y = int(sub['y'].iloc[0])
+                x = int(sub['x'].iloc[0])
+                on = bool(sub['on_mito'].iloc[0])
+                label = (f"id={int(nuc_id):d} "
+                         f"z={z} y={y} x={x} "
+                         f"{'on-mito' if on else 'off-mito'}")
+                out_path = os.path.join(
+                    per_nuc_dir,
+                    f"nucleoid_{int(nuc_id):03d}_z{z}_y{y}_x{x}.png"
+                )
+                try:
+                    render_single_nucleoid_radial(
+                        out_path, sub, int(punct_scan_radius), label,
+                    )
+                    n_ok += 1
+                except Exception as exc:
+                    n_fail += 1
+                    if n_fail <= 3:
+                        click.echo(f"  per-nucleoid PNG {nuc_id} failed: {exc}")
+            click.echo(f"  wrote {n_ok} per-nucleoid radial PNGs to "
+                       f"per_nucleoid/ ({n_fail} failed)" if n_fail
+                       else f"  wrote {n_ok} per-nucleoid radial PNGs to "
+                            f"per_nucleoid/")
 
     return area_row, radial_df
 
@@ -762,13 +838,19 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
               help='Write the 2x3 central-slice analysis PNG per image.')
 @click.option('--save-histogram-png/--no-save-histogram-png', default=True,
               help='Write the per-channel intensity histogram PNG per image.')
+@click.option('--save-per-nucleoid-png/--no-save-per-nucleoid-png', default=True,
+              help='Write one radial-profile PNG per detected mtDNA nucleoid '
+                   'into {basename}{run_name}/per_nucleoid/. Lots of files '
+                   'for high-nucleoid images; disable if you only want the '
+                   'aggregated per-image and pooled plots.')
 def main(input_dir, input_pattern, output_dir, run_name,
          mtdna_channel, mito_channel, protein_channel,
          mito_threshold_percentile, mito_dilation,
          mtdna_threshold_percentile, mtdna_dilation,
          septin_threshold_percentile,
          punct_scan_radius, min_nucleoid_voxels,
-         save_channel_mrcs, save_analysis_png, save_histogram_png):
+         save_channel_mrcs, save_analysis_png, save_histogram_png,
+         save_per_nucleoid_png):
     """Analyze 3D STED colocalization: mito/mtDNA/septin masks + Area1/Area2
     septin densities + per-nucleoid 3D radial intensity profiles."""
     if not input_dir:
@@ -819,6 +901,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 save_channel_mrcs_flag=save_channel_mrcs,
                 save_analysis_png_flag=save_analysis_png,
                 save_histogram_png_flag=save_histogram_png,
+                save_per_nucleoid_png_flag=save_per_nucleoid_png,
             )
         except Exception as exc:
             click.echo(f"  ERROR processing {image_path}: {exc}")

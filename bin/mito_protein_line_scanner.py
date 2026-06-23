@@ -68,75 +68,152 @@ def get_colormaps():
 
 
 
-def lasso_select_cell(image):
+def lasso_select_cell(mito_image, protein_image=None):
     """
-    Launch a lasso selection GUI to select a cell region in the given image.
+    Launch a lasso selection GUI to select a cell region.
 
     Parameters:
-    - image: 2D numpy array representing the image.
+    - mito_image:    2D numpy array, mitochondria channel (shown first).
+    - protein_image: 2D numpy array, protein channel (optional). When
+                     provided, a "Switch Channel" button lets the user toggle
+                     between the two channels to draw the lasso on whichever
+                     gives a clearer cell boundary.
 
     Returns:
     - mask: 2D boolean numpy array where True indicates selected region.
     """
-    from matplotlib.widgets import LassoSelector, Slider
+    from matplotlib.widgets import LassoSelector, Slider, Button
     from matplotlib.path import Path
-    from matplotlib.widgets import Slider, Button
-    import numpy as np
+
+    channels = [mito_image]
+    ch_names = ['Mito']
+    if protein_image is not None:
+        channels.append(protein_image)
+        ch_names.append('Protein')
+
+    state = {'ch_idx': 0}
+
+    def current_img():
+        return channels[state['ch_idx']]
+
+    CH_COLORS = ['cyan', 'orange']   # mito → cyan, protein → orange
 
     fig, ax = plt.subplots()
-    fig.subplots_adjust(bottom=0.18)  # make room for sliders
+    fig.subplots_adjust(bottom=0.22)  # room for sliders + button
 
-    # initial contrast limits using robust percentiles
-    vmin0 = float(np.percentile(image, 1))
-    vmax0 = float(np.percentile(image, 99))
-    im = ax.imshow(image, cmap='gray', vmin=vmin0, vmax=vmax0)
-    ax.set_title('Lasso to select a cell region (optional). '
-                 'Close the window without drawing to use the whole image.')
+    img0 = current_img()
+    vmin0 = float(np.percentile(img0, 1))
+    vmax0 = float(np.percentile(img0, 99))
+    im = ax.imshow(img0, cmap='gray', vmin=vmin0, vmax=vmax0)
 
-    # Slider axes (normalized figure coords)
-    axcolor = 'lightgoldenrodyellow'
-    ax_min = fig.add_axes([0.15, 0.08, 0.7, 0.03], facecolor=axcolor)
-    ax_max = fig.add_axes([0.15, 0.04, 0.7, 0.03], facecolor=axcolor)
+    # mask overlay — updated after each lasso draw
+    mask_rgba = np.zeros((*mito_image.shape, 4), dtype=np.float32)
+    im_mask = ax.imshow(mask_rgba)
 
-    pmin = Slider(ax_min, 'Min', float(image.min()), float(image.max()), valinit=vmin0)
-    pmax = Slider(ax_max, 'Max', float(image.min()), float(image.max()), valinit=vmax0)
+    # ---- legend in the top-left corner of the image ----
+    legend_lines = []
+    legend_entries = [
+        ('white',  'Lasso path'),
+        ('red',    'Selected region (mask)'),
+    ]
+    for ci, name in enumerate(ch_names):
+        legend_entries.append((CH_COLORS[ci], f'Ch {ci}: {name}'))
 
-    def update(val):
-        vmin = pmin.val
-        vmax = pmax.val
-        if vmin >= vmax:
-            # prevent inverted contrast range
-            return
-        im.set_clim(vmin, vmax)
+    for i, (color, label) in enumerate(legend_entries):
+        t = ax.text(
+            0.01, 0.99 - i * 0.055, f'■ {label}',
+            transform=ax.transAxes,
+            color=color, fontsize=9, va='top', ha='left',
+            bbox=dict(boxstyle='round,pad=0.2', fc='black', alpha=0.55, ec='none'),
+        )
+        legend_lines.append(t)
+
+    # channel indicator — bold colored text showing which channel is active
+    ch_indicator = ax.text(
+        0.5, 0.01, '',
+        transform=ax.transAxes,
+        fontsize=11, fontweight='bold', ha='center', va='bottom',
+        bbox=dict(boxstyle='round,pad=0.3', fc='black', alpha=0.65, ec='none'),
+    )
+
+    def _update_channel_indicator():
+        idx = state['ch_idx']
+        ch_indicator.set_text(f'Viewing: {ch_names[idx]} channel')
+        ch_indicator.set_color(CH_COLORS[idx])
         fig.canvas.draw_idle()
 
-    pmin.on_changed(update)
-    pmax.on_changed(update)
+    def _title():
+        ax.set_title('Lasso to select cell — close without drawing to use whole image')
 
-    mask = np.zeros(image.shape, dtype=bool)
-    drew_lasso = False  # set True only when the user actually drew something
+    _title()
+    _update_channel_indicator()
+
+    axcolor = 'lightgoldenrodyellow'
+    ax_min = fig.add_axes([0.15, 0.12, 0.65, 0.03], facecolor=axcolor)
+    ax_max = fig.add_axes([0.15, 0.07, 0.65, 0.03], facecolor=axcolor)
+
+    pmin = Slider(ax_min, 'Min', float(img0.min()), float(img0.max()), valinit=vmin0)
+    pmax = Slider(ax_max, 'Max', float(img0.min()), float(img0.max()), valinit=vmax0)
+
+    def update_contrast(_val):
+        vmin, vmax = pmin.val, pmax.val
+        if vmin < vmax:
+            im.set_clim(vmin, vmax)
+            fig.canvas.draw_idle()
+
+    pmin.on_changed(update_contrast)
+    pmax.on_changed(update_contrast)
+
+    # "Switch Channel" button — only useful when a second channel is provided
+    if protein_image is not None:
+        ax_switch = fig.add_axes([0.82, 0.08, 0.15, 0.06])
+        btn_switch = Button(ax_switch, 'Switch\nChannel',
+                            color='lightblue', hovercolor='skyblue')
+
+        def on_switch(_event):
+            state['ch_idx'] = 1 - state['ch_idx']
+            img = current_img()
+            im.set_data(img)
+            vmin_new = float(np.percentile(img, 1))
+            vmax_new = float(np.percentile(img, 99))
+            im.set_clim(vmin_new, vmax_new)
+            # reset sliders to the new channel's range
+            pmin.valmin = float(img.min())
+            pmin.valmax = float(img.max())
+            pmin.set_val(vmin_new)
+            pmax.valmin = float(img.min())
+            pmax.valmax = float(img.max())
+            pmax.set_val(vmax_new)
+            _update_channel_indicator()
+            fig.canvas.draw_idle()
+
+        btn_switch.on_clicked(on_switch)
+
+    mask = np.zeros(mito_image.shape, dtype=bool)
+    drew_lasso = False
 
     def onselect(verts):
         path = Path(verts)
-        y, x = np.mgrid[:image.shape[0], :image.shape[1]]
+        y, x = np.mgrid[:mito_image.shape[0], :mito_image.shape[1]]
         points = np.vstack((x.flatten(), y.flatten())).T
         mask_flat = path.contains_points(points)
         nonlocal mask, drew_lasso
-        mask = mask_flat.reshape(image.shape)
+        mask = mask_flat.reshape(mito_image.shape)
         drew_lasso = True
-        # keep figure open until user closes it
+        # update red overlay so the selected region is visible
+        rgba = np.zeros((*mito_image.shape, 4), dtype=np.float32)
+        rgba[mask, 0] = 1.0   # red
+        rgba[mask, 3] = 0.35  # semi-transparent
+        im_mask.set_data(rgba)
+        fig.canvas.draw_idle()
 
-    lasso = LassoSelector(ax, onselect)
+    lasso = LassoSelector(ax, onselect)  # noqa: F841 — must stay referenced
 
     plt.show()
 
-    # If the user closed the window without drawing a lasso path (or drew an
-    # empty/degenerate one), fall back to "use the whole image" instead of the
-    # all-False initial mask. The previous behaviour silently zeroed out the
-    # entire image downstream, which made the rest of the pipeline useless.
     if not drew_lasso or not mask.any():
         print("No lasso drawn -- using the entire image as the cell ROI.")
-        mask = np.ones(image.shape, dtype=bool)
+        mask = np.ones(mito_image.shape, dtype=bool)
     else:
         print(f"Lasso ROI: {int(mask.sum()):,} px "
               f"({100 * mask.mean():.1f}% of image)")
@@ -474,6 +551,7 @@ def select_mask_gui(
         'show_nodes': False,
         'show_ridge': False,
         'show_excluded': True,
+        'show_labels': False,
     }
 
     def compute_ridge():
@@ -640,14 +718,18 @@ def select_mask_gui(
                       color='lightgreen', hovercolor='palegreen')
 
     # --------- view toggles + thickness-filter toggle ---------
-    ax_check = fig.add_axes([0.68, 0.18, 0.29, 0.14])
+    ax_check = fig.add_axes([0.68, 0.16, 0.29, 0.16])
     check = CheckButtons(
         ax_check,
-        ['Binary', 'Skeleton', 'Nodes', 'Ridge', 'Excluded', 'Filter ON'],
+        ['Binary', 'Skeleton', 'Nodes', 'Ridge', 'Excluded', 'Filter ON', 'Labels'],
         [state['show_binary'], state['show_skel'],
          state['show_nodes'], state['show_ridge'],
-         state['show_excluded'], state['use_thickness']],
+         state['show_excluded'], state['use_thickness'],
+         state['show_labels']],
     )
+
+    # list to track node/edge label text artists so we can clear them on toggle
+    _label_artists = []
 
     # --------- stats text ---------
     stats_ax = fig.add_axes([0.10, 0.05, 0.86, 0.05])
@@ -742,6 +824,29 @@ def select_mask_gui(
             f"{thick_summary}   "
             f"filter[{state['min_thick']:.1f}-{state['max_thick']:.1f}]: {filt_state}"
         )
+        # node / edge labels
+        for art in _label_artists:
+            art.remove()
+        _label_artists.clear()
+        if state['show_labels'] and state['nx'] is not None:
+            g = state['nx']
+            nodes_d = g.nodes()
+            h, w = img.shape[:2]
+            # node IDs — skip any node whose position is outside the image
+            for n in nodes_d:
+                y, x = nodes_d[n]['o']
+                if not (0 <= x < w and 0 <= y < h):
+                    continue
+                txt = ax.text(
+                    x, y, str(n),
+                    color='yellow', fontsize=9, ha='center', va='center',
+                    clip_on=True,
+                    bbox=dict(boxstyle='round,pad=0.1', fc='black',
+                              alpha=0.6, ec='none'),
+                )
+                txt.set_clip_box(ax.bbox)
+                _label_artists.append(txt)
+
         fig.canvas.draw_idle()
 
     refresh_display()
@@ -849,6 +954,9 @@ def select_mask_gui(
                 compute_thickness()
             recompute_from_thickness()
             refresh_display()
+        elif label == 'Labels':
+            state['show_labels'] = not state['show_labels']
+            refresh_display()
     check.on_clicked(on_check)
 
     plt.show()
@@ -872,7 +980,17 @@ def select_mask_gui(
             if state['skel'] is not None
             else np.zeros_like(img, dtype=bool))
     graph = state['nx'] if state['nx'] is not None else nx.MultiGraph()
-    return float(threshold_value), binary_final, skel, graph
+    final_params = {
+        'tubule_radius':      float(state['tubule_r']),
+        'sensitivity':        float(state['sensitivity']),
+        'min_object_size':    int(state['min_size']),
+        'gap_closing':        int(state['close_r']),
+        'use_thickness_filter': bool(state['use_thickness']),
+        'min_thickness':      float(state['min_thick']),
+        'max_thickness':      float(state['max_thick']),
+        'ridge_threshold':    float(threshold_value),
+    }
+    return float(threshold_value), binary_final, skel, graph, final_params
 
 
 def compute_mito_mask_noninteractive(
@@ -952,7 +1070,17 @@ def compute_mito_mask_noninteractive(
 
     # Return the *final* (thickness-filtered) binary so it's self-consistent
     # with the filtered skeleton/graph.
-    return float(thr), bn_final, skel, graph
+    final_params = {
+        'tubule_radius':        float(tubule_radius),
+        'sensitivity':          float(sensitivity),
+        'min_object_size':      int(min_object_size),
+        'gap_closing':          int(gap_closing),
+        'use_thickness_filter': bool(use_thickness_filter),
+        'min_thickness':        float(min_thickness),
+        'max_thickness':        float(max_thickness),
+        'ridge_threshold':      float(thr),
+    }
+    return float(thr), bn_final, skel, graph, final_params
 
 
 def process_images(
@@ -975,6 +1103,7 @@ def process_images(
     min_thickness=1.0,
     max_thickness=20.0,
     binary_mask_dir_output='',
+    mask_ch=None,
 ):
     """Main processing function for analyzing mitochondrial networks."""
 
@@ -1023,18 +1152,28 @@ def process_images(
         protein_img = img[protein_ch, :, :]
         
         # Handle mask loading or creation
-        if mask_dir_input:
+        # Priority: (1) mask channel in image → (2) saved mask directory → (3) draw with lasso
+        if mask_ch is not None:
+            # Use a channel from the image as the cell mask (threshold at Otsu)
+            cell_ch_img = img[mask_ch, :, :]
+            from skimage.filters import threshold_otsu
+            thr = threshold_otsu(cell_ch_img)
+            mask = cell_ch_img > thr
+            click.echo(f"  Cell mask from channel {mask_ch} (Otsu thr={thr:.1f}): "
+                       f"{int(mask.sum()):,} px ({100*mask.mean():.1f}%)")
+        elif mask_dir_input:
             mask_path = os.path.join(mask_dir_input, os.path.basename(image))
             if os.path.exists(mask_path):
                 mask = tf.imread(mask_path).astype(bool)
+                click.echo(f"  Loaded cell mask from {mask_path}")
             else:
-                mask = lasso_select_cell(mito_img)
+                click.echo(f"  No saved mask found at {mask_path} — drawing lasso")
+                mask = lasso_select_cell(mito_img, protein_img)
                 tf.imwrite(os.path.join(mask_dir_output, os.path.basename(image)), mask)
         else:
-            mask = lasso_select_cell(mito_img)
+            mask = lasso_select_cell(mito_img, protein_img)
             plt.imshow(mask.astype(int))
             plt.show()
-            #write out masked image
             tf.imwrite(os.path.join(mask_dir_output, os.path.basename(image)), mask)
 
         # Prepare mitochondrial image
@@ -1056,14 +1195,42 @@ def process_images(
             max_thickness=max_thickness,
         )
         if use_threshold_gui:
-            binarization_threshold, mito_binary, mito_skeleton, mito_nx = \
+            binarization_threshold, mito_binary, mito_skeleton, mito_nx, gui_params = \
                 select_mask_gui(mito_img_eq, **pipeline_kwargs)
             click.echo(f"Selected ridge threshold: {binarization_threshold:.3f}")
         else:
             # Non-interactive: run the same pipeline using config/CLI defaults.
-            binarization_threshold, mito_binary, mito_skeleton, mito_nx = \
+            binarization_threshold, mito_binary, mito_skeleton, mito_nx, gui_params = \
                 compute_mito_mask_noninteractive(mito_img_eq, **pipeline_kwargs)
             click.echo(f"Computed ridge threshold (no-gui): {binarization_threshold:.3f}")
+
+        # Save run parameters to YAML for reproducibility
+        import yaml
+        params_record = {
+            'image': os.path.basename(image),
+            'run_name': run_name,
+            'channels': {
+                'mito_channel':    mito_ch,
+                'protein_channel': protein_ch,
+                **(({'mask_channel': mask_ch}) if mask_ch is not None else {}),
+            },
+            'cell_mask': {
+                'source': ('channel' if mask_ch is not None
+                           else 'directory' if mask_dir_input else 'lasso'),
+            },
+            'scan': {
+                'scan_width':      scan_width,
+                'path_sampling':   path_sampling,
+                'min_path_length': min_path_length,
+            },
+            'ridge_filter': gui_params,
+        }
+        params_path = os.path.join(
+            output_dir, f"{basename}{run_name}_parameters.yml"
+        )
+        with open(params_path, 'w') as _pf:
+            yaml.dump(params_record, _pf, default_flow_style=False, sort_keys=False)
+        click.echo(f"  Parameters saved → {params_path}")
 
         # Optionally save the final mito binary mask (post-thickness-filter)
         # so the user can reuse it in downstream workflows. We save uint8 0/255
@@ -1084,11 +1251,13 @@ def process_images(
 
         mito_scan = img[mito_ch, :, :]
         protein_scan = img[protein_ch, :, :]
-        mito_i = 0
-        
+
         for u, v in mito_nx.edges():
             for i in range(len(mito_nx[u][v])):
-                mito_i = mito_i + 1
+                # Name files after the actual node IDs so they match the GUI labels.
+                # For the common case (single edge between u and v) use "u_v";
+                # for parallel edges (multi-graph) append the edge key: "u_v_k".
+                edge_tag = f"{u}_{v}" if i == 0 else f"{u}_{v}_{i}"
                 path = mito_nx[u][v][i]['pts']
                 path_mito = path
                 
@@ -1169,7 +1338,7 @@ def process_images(
                 ax[0].scatter(path_mito[:, 1], path_mito[:, 0], c=cm.winter(np.array(path_length)/np.max(path_length)))
                 ax[0].plot(path_x, path_y, color='blue', linewidth=1)
                 ax[0].scatter(normal_y_plot, normal_x_plot, color='red', s=1)
-                ax[0].set_title(f"Mito {mito_i} - Path length: {len(path_mito)}")
+                ax[0].set_title(f"Mito {edge_tag} - Path length: {len(path_mito)}")
                 ax[0].set_facecolor('black')
                 ax[0].set_xlim(np.min(path_x)-20, np.max(path_x)+20)
                 ax[0].set_ylim(np.min(path_y)-20, np.max(path_y)+20)
@@ -1179,7 +1348,7 @@ def process_images(
                 ax[1].scatter(path_mito[:, 1], path_mito[:, 0], c=cm.winter(np.array(path_length)/np.max(path_length)))
                 ax[1].plot(path_x, path_y, color='blue', linewidth=1)
                 ax[1].scatter(normal_y_plot, normal_x_plot, color='red', s=1)
-                ax[1].set_title(f"Scan {mito_i} - Path length: {len(path_mito)}")
+                ax[1].set_title(f"Scan {edge_tag} - Path length: {len(path_mito)}")
                 ax[1].set_facecolor('black')
                 ax[1].set_xlim(np.min(path_x)-20, np.max(path_x)+20)
                 ax[1].set_ylim(np.min(path_y)-20, np.max(path_y)+20)
@@ -1206,13 +1375,13 @@ def process_images(
                 ax[2].set_ylabel("Intensity (AU)")
                 ax[2].legend()
                 
-                plt.savefig(f"{output_dir}/{basename}_mito_{mito_i}_intensities.png")
+                plt.savefig(f"{output_dir}/{basename}_mito_{edge_tag}_intensities.png")
                 plt.close()
 
                 # Save data to CSV
                 data = {'Distance': path_length, 'Mito_Intensity': mito_intensities, 'Scan_Intensity': scan_intensities}
                 df = pd.DataFrame(data)
-                df.to_csv(f"{output_dir}/{basename}_mito_{mito_i}.csv", index=False)
+                df.to_csv(f"{output_dir}/{basename}_mito_{edge_tag}.csv", index=False)
 
 
 @click.command()
@@ -1223,6 +1392,9 @@ def process_images(
 @click.option('--run-name', default='run1', help='Run name suffix for output directories')
 @click.option('--mito-channel', default=0, type=int, help='0-based index for mitochondria channel')
 @click.option('--protein-channel', default=2, type=int, help='0-based index for protein channel')
+@click.option('--mask-channel', default=None, type=int,
+              help='0-based index of a channel to use as the cell mask (Otsu threshold). '
+                   'Takes priority over --mask-dir-input and lasso drawing.')
 @click.option('--use-gui/--no-gui', default=True, help='Use interactive GUI for threshold selection')
 @click.option('--scan-width', default=4, type=int, help='Pixels on each side of the path for scanning')
 @click.option('--path-sampling', default=5, type=int, help='Number of subpixel samples along the normal')
@@ -1256,7 +1428,7 @@ def process_images(
                    '(post-thickness-filter) as `{basename}_mito_binary.tif` '
                    '(uint8, 0/255). Leave empty to skip saving.')
 def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
-         mito_channel, protein_channel, use_gui, scan_width, path_sampling,
+         mito_channel, protein_channel, mask_channel, use_gui, scan_width, path_sampling,
          min_path_length, tubule_radius, sensitivity, min_object_size,
          gap_closing, use_thickness_filter, min_thickness, max_thickness,
          binary_mask_dir_output):
@@ -1290,6 +1462,7 @@ def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
         min_thickness=min_thickness,
         max_thickness=max_thickness,
         binary_mask_dir_output=binary_mask_dir_output,
+        mask_ch=mask_channel,
     )
     
     click.echo("Processing complete!")

@@ -125,6 +125,7 @@ dmypy.json
 # Data directories (large files)
 20251021_decon_data/
 MEH_run_1/
+example/
 *.tiff
 *.tif
 *.csv
