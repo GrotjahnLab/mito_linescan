@@ -581,7 +581,7 @@ def render_single_nucleoid_radial(
         # contribute to the radial profile averages shown above the panel.
         if mask_crop is not None and mask_crop.any() and not mask_crop.all():
             ax.contour(mask_crop.astype(float), levels=[0.5],
-                       colors='white', linewidths=0.6, alpha=0.7)
+                       colors='white', linewidths=1.8, alpha=0.85)
         # Centroid marker
         ax.plot(cx_local, cy_local, '+',
                 markeredgecolor='yellow', markersize=12, markeredgewidth=1.6)
