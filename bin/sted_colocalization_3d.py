@@ -27,8 +27,14 @@ Per multi-channel 3D TIFF in --input-dir:
      mtdna_mask_3d, dropping ones below --min-nucleoid-voxels). For each
      centroid, compute 3D radial intensity profiles (spherical shells out to
      --punct-scan-radius voxels) in ALL THREE channels using
-     percentile-normalized [0,1] intensity. Save the per-image long-format
-     CSV and (across all images) a pooled CSV + a 3-panel mean ± SEM plot.
+     percentile-normalized [0,1] intensity. The radial averages are
+     restricted to voxels INSIDE a separately-thresholded mito mask
+     (--radial-scan-mito-threshold-percentile, default 99 + dilation), so
+     "intensity vs distance" reflects mito interior only — voxels outside
+     the mito (background, cytosol) are excluded from both the sum and the
+     count, and shells with no in-mask voxels yield NaN. Save the per-image
+     long-format CSV and (across all images) a pooled CSV + a 3-panel mean
+     ± SEM plot.
 
 Per-image outputs (in {output_dir}/{basename}{run_name}/):
   {basename}_{mtdna|mito|septin}.mrc   single-channel MRC exports (toggleable)
@@ -254,12 +260,18 @@ def _normalize_3d(ch, mask=None):
     return np.clip((arr - p_lo) / denom, 0.0, 1.0).astype(np.float32)
 
 
-def _radial_profile_3d(image, z0, y0, x0, radius):
+def _radial_profile_3d(image, z0, y0, x0, radius, mask=None):
     """Mean intensity vs integer 3D distance from `(z0, y0, x0)` to `radius`.
 
     Returns a length-(radius+1) float32 array. Bin `r` contains voxels whose
     Euclidean distance to the center, rounded to the nearest integer, equals
     `r`. NaN at radii whose shell has no voxels inside the volume bounds.
+
+    If `mask` is provided (a boolean 3D array the same shape as `image`),
+    voxels outside the mask are excluded from BOTH the sum and the count.
+    Shells with zero voxels inside the mask therefore return NaN. This is
+    how the caller restricts the radial average to "inside the
+    mitochondrion" — pass the scan-time mito mask here.
 
     Same idea as the 2D `_radial_profile` but with a third axis. We compute
     one volumetric distance map, ravel it, then `np.bincount` over rounded
@@ -281,6 +293,11 @@ def _radial_profile_3d(image, z0, y0, x0, radius):
     d = np.sqrt((zz - z0) ** 2 + (yy - y0) ** 2 + (xx - x0) ** 2).ravel()
     d_int = np.rint(d).astype(np.int64)
     valid = d_int <= radius
+
+    if mask is not None:
+        sub_mask = mask[z_min:z_max, y_min:y_max, x_min:x_max].astype(bool).ravel()
+        valid = valid & sub_mask
+
     d_int = d_int[valid]
     vals = sub.ravel()[valid]
 
@@ -296,12 +313,19 @@ def compute_radial_profiles_3d(
     coords, on_mito,
     mtdna_n, mito_n, septin_n,
     radius, basename,
+    scan_mask=None,
 ):
     """Per-nucleoid 3D radial intensity profiles in all three channels.
 
     Returns a long-format DataFrame with one row per (nucleoid, distance):
         image_name, nucleoid_id, z, y, x, on_mito, distance,
         mtdna_intensity, mito_intensity, septin_intensity
+
+    `scan_mask` (optional, same shape as the channel volumes) restricts
+    every shell average to voxels INSIDE the mask. Typically the caller
+    passes a stricter mito mask here so the radial profile reports only
+    intensity inside the mitochondrion. Shells with no in-mask voxels yield
+    NaN; pandas-side `.mean()` and `.sem()` automatically skip these.
     """
     cols = ['image_name', 'nucleoid_id', 'z', 'y', 'x', 'on_mito', 'distance',
             'mtdna_intensity', 'mito_intensity', 'septin_intensity']
@@ -315,9 +339,9 @@ def compute_radial_profiles_3d(
     sp = np.empty((n, nb), dtype=np.float32)
     for i in range(n):
         z, y, x = int(coords[i, 0]), int(coords[i, 1]), int(coords[i, 2])
-        mt[i] = _radial_profile_3d(mtdna_n, z, y, x, radius)
-        mi[i] = _radial_profile_3d(mito_n, z, y, x, radius)
-        sp[i] = _radial_profile_3d(septin_n, z, y, x, radius)
+        mt[i] = _radial_profile_3d(mtdna_n, z, y, x, radius, mask=scan_mask)
+        mi[i] = _radial_profile_3d(mito_n, z, y, x, radius, mask=scan_mask)
+        sp[i] = _radial_profile_3d(septin_n, z, y, x, radius, mask=scan_mask)
 
     nucleoid_id = np.repeat(np.arange(n, dtype=np.int64), nb)
     distance = np.tile(np.arange(nb, dtype=np.int64), n)
@@ -480,6 +504,7 @@ def _clim_percentile(arr, lo=1.0, hi=99.5):
 def render_single_nucleoid_radial(
     out_path, single_df, radius, label,
     mtdna_vol, mito_vol, septin_vol, z, y, x,
+    scan_mask=None,
 ):
     """2x3 plot for ONE nucleoid:
        Top row    = mtDNA / mito / septin radial profile (single sample).
@@ -539,12 +564,24 @@ def render_single_nucleoid_radial(
         (axes[1, 1], 'septin + mito', septin_crop, 'Reds',   mito_crop,   'Greens'),
         (axes[1, 2], 'mtDNA + septin', mtdna_crop, 'Blues',  septin_crop, 'Reds'),
     ]
+    # Optional: 2D slice of the scan mask over this crop, for the contour
+    # overlay on each image panel. Computed once; reused across panels.
+    if scan_mask is not None:
+        mask_crop = scan_mask[z_disp, y_min:y_max, x_min:x_max]
+    else:
+        mask_crop = None
+
     for ax, title, img_a, cmap_a, img_b, cmap_b in composites:
         vmin_a, vmax_a = _clim_percentile(img_a)
         vmin_b, vmax_b = _clim_percentile(img_b)
         # Layer A solid, layer B alpha-blended on top.
         ax.imshow(img_a, cmap=cmap_a, vmin=vmin_a, vmax=vmax_a, alpha=0.75)
         ax.imshow(img_b, cmap=cmap_b, vmin=vmin_b, vmax=vmax_b, alpha=0.55)
+        # Scan-mask boundary contour. Only voxels INSIDE this contour
+        # contribute to the radial profile averages shown above the panel.
+        if mask_crop is not None and mask_crop.any() and not mask_crop.all():
+            ax.contour(mask_crop.astype(float), levels=[0.5],
+                       colors='white', linewidths=0.6, alpha=0.7)
         # Centroid marker
         ax.plot(cx_local, cy_local, '+',
                 markeredgecolor='yellow', markersize=12, markeredgewidth=1.6)
@@ -618,6 +655,8 @@ def process_one_image_3d(
     septin_threshold_percentile,
     punct_scan_radius,
     min_nucleoid_voxels,
+    radial_scan_mito_threshold_percentile,
+    radial_scan_mito_dilation,
     save_channel_mrcs_flag,
     save_analysis_png_flag,
     save_histogram_png_flag,
@@ -743,6 +782,7 @@ def process_one_image_3d(
 
     if centroids.shape[0] == 0:
         radial_df = None
+        radial_scan_mask = None
     else:
         # Normalize each channel to [0, 1] over its own voxels so profiles
         # are comparable across images and between channels. Use the raw
@@ -752,10 +792,29 @@ def process_one_image_3d(
         mito_n = _normalize_3d(mito_raw)
         septin_n = _normalize_3d(septin_raw)
 
+        # Build a separate, scan-time mito mask (defaults: 99th-percentile
+        # threshold + 3-voxel dilation -> strict "definitely inside mito")
+        # so the radial average only sees voxels that actually belong to a
+        # mitochondrion. This is independent of the Area1/Area2 mito mask;
+        # the two analyses use different thresholds by design.
+        radial_scan_mask, radial_scan_thr = compute_mito_mask_3d(
+            mito_ch,
+            radial_scan_mito_threshold_percentile,
+            radial_scan_mito_dilation,
+        )
+        click.echo(
+            f"  radial-scan mito mask: thr@"
+            f"{radial_scan_mito_threshold_percentile}%={radial_scan_thr:.1f}, "
+            f"dilation={radial_scan_mito_dilation}, "
+            f"{int(radial_scan_mask.sum())} voxels "
+            f"({100.0 * radial_scan_mask.sum() / radial_scan_mask.size:.2f}% of volume)"
+        )
+
         on_mito = mito_mask_3d[centroids[:, 0], centroids[:, 1], centroids[:, 2]]
         radial_df = compute_radial_profiles_3d(
             centroids, on_mito, mtdna_n, mito_n, septin_n,
             radius=int(punct_scan_radius), basename=basename,
+            scan_mask=radial_scan_mask,
         )
         radial_csv = os.path.join(image_out_dir,
                                    f"{basename}_radial_profiles.csv")
@@ -805,10 +864,14 @@ def process_one_image_3d(
                     # Pass the RAW channel volumes (pre-mean-threshold) so
                     # the image-context crops aren't biased by the
                     # visualization zeroing step. The radial profile values
-                    # in `sub` are unchanged.
+                    # in `sub` are unchanged. Also pass the scan-time mito
+                    # mask so its boundary is drawn on each crop — voxels
+                    # inside that contour are the ones that actually
+                    # contributed to the radial averages above.
                     render_single_nucleoid_radial(
                         out_path, sub, int(punct_scan_radius), label,
                         mtdna_raw, mito_raw, septin_raw, z, y, x,
+                        scan_mask=radial_scan_mask,
                     )
                     n_ok += 1
                 except Exception as exc:
@@ -919,6 +982,18 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
 @click.option('--min-nucleoid-voxels', default=5, type=int, show_default=True,
               help='Drop mtDNA connected components smaller than this many '
                    'voxels before computing centroids.')
+@click.option('--radial-scan-mito-threshold-percentile', default=99, type=float,
+              show_default=True,
+              help='Percentile of nonzero mito voxels used to build the '
+                   'scan-time mito mask. Voxels outside this mask are '
+                   'EXCLUDED from the radial intensity averages (so only '
+                   'intensity *inside the mitochondrion* contributes). '
+                   'Defaults to 99 (strict) and is independent of '
+                   '--mito-threshold-percentile, which drives Area1/Area2.')
+@click.option('--radial-scan-mito-dilation', default=3, type=int,
+              show_default=True,
+              help='Binary-dilation iterations applied to the scan-time mito '
+                   'mask after percentile thresholding.')
 @click.option('--save-channel-mrcs/--no-save-channel-mrcs', default=True,
               help='Write {basename}_{septin|mito|mtDNA}.mrc files per image.')
 @click.option('--save-analysis-png/--no-save-analysis-png', default=True,
@@ -936,6 +1011,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
          mtdna_threshold_percentile, mtdna_dilation,
          septin_threshold_percentile,
          punct_scan_radius, min_nucleoid_voxels,
+         radial_scan_mito_threshold_percentile, radial_scan_mito_dilation,
          save_channel_mrcs, save_analysis_png, save_histogram_png,
          save_per_nucleoid_png):
     """Analyze 3D STED colocalization: mito/mtDNA/septin masks + Area1/Area2
@@ -966,6 +1042,9 @@ def main(input_dir, input_pattern, output_dir, run_name,
     click.echo(f"  septin thr={septin_threshold_percentile}%")
     click.echo(f"  radial scan radius={punct_scan_radius} voxels, "
                f"min_nucleoid_voxels={min_nucleoid_voxels}")
+    click.echo(f"  radial-scan mito mask: "
+               f"thr@{radial_scan_mito_threshold_percentile}%, "
+               f"dilation={radial_scan_mito_dilation}")
 
     area_rows = []
     radial_dfs = []
@@ -985,6 +1064,8 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 septin_threshold_percentile=septin_threshold_percentile,
                 punct_scan_radius=punct_scan_radius,
                 min_nucleoid_voxels=min_nucleoid_voxels,
+                radial_scan_mito_threshold_percentile=radial_scan_mito_threshold_percentile,
+                radial_scan_mito_dilation=radial_scan_mito_dilation,
                 save_channel_mrcs_flag=save_channel_mrcs,
                 save_analysis_png_flag=save_analysis_png,
                 save_histogram_png_flag=save_histogram_png,

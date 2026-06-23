@@ -285,6 +285,10 @@ sted_colocalization_3d:
   septin_threshold_percentile: 95      # For stats reporting
   punct_scan_radius: 20                # Radial profile radius (voxels)
   min_nucleoid_voxels: 5               # Drop tiny mtDNA components
+  # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
+  # radial profile (so intensity vs distance reflects mito interior only).
+  radial_scan_mito_threshold_percentile: 99
+  radial_scan_mito_dilation: 3
   save_channel_mrcs: true
   save_analysis_png: true
   save_histogram_png: true

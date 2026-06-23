@@ -142,6 +142,11 @@ sted_colocalization_3d:
   # 3D radial intensity profile around mtDNA nucleoid centroids
   punct_scan_radius: 20                # Profile radius (voxels, isotropic)
   min_nucleoid_voxels: 5               # Drop tiny mtDNA components
+  # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
+  # radial profile (so "intensity vs distance" reflects mito interior only).
+  # Independent of mito_threshold_percentile above, which drives Area1/Area2.
+  radial_scan_mito_threshold_percentile: 99
+  radial_scan_mito_dilation: 3
   # Output toggles
   save_channel_mrcs: true              # Per-channel float32 MRC exports
   save_analysis_png: true              # 2x3 central-slice visualization
