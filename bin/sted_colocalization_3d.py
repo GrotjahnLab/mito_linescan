@@ -43,11 +43,22 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        as the pooled plot but over this
                                        image's nucleoids only
   per_nucleoid/nucleoid_{id:03d}_z{z}_y{y}_x{x}.png
-                                       one 3-panel radial profile plot per
-                                       detected mtDNA nucleoid (no error
-                                       band — single sample); subdirectory
-                                       to keep the per-image dir tidy when
-                                       a single image has many nucleoids
+                                       2x3 plot per detected mtDNA nucleoid:
+                                         top row    = radial profile in
+                                                      mtDNA / mito / septin
+                                                      (single-sample lines)
+                                         bottom row = 2-channel image crops
+                                                      at the centroid's Z
+                                                      slice, sized to the
+                                                      scan window:
+                                                       under mtDNA   = mtDNA+mito
+                                                       under mito    = septin+mito
+                                                       under septin  = mtDNA+septin
+                                       Centroid marked with a yellow '+';
+                                       dashed yellow circle shows the scan
+                                       radius. Lives in a subdirectory to
+                                       keep the per-image dir tidy when an
+                                       image has many nucleoids.
 
 Pooled outputs (in {output_dir}/):
   analysis_results.csv                 per-image Area1/Area2/ratio summary
@@ -452,23 +463,51 @@ def render_ratios_boxplot(out_path, ratios_a1_mito, ratios_a2_mito):
     plt.close(fig)
 
 
-def render_single_nucleoid_radial(out_path, single_df, radius, label):
-    """3-panel mtDNA / mito / septin radial profile for ONE nucleoid.
-
-    Unlike the pooled/mean plot, this shows the raw radial profile of a
-    single mtDNA nucleoid: one line per channel with markers at each integer
-    distance bin. No error band because there's no variance over nucleoids
-    here (it's a single sample). Useful for spotting outlier nucleoids and
-    QC'ing individual profiles before pooling.
+def _clim_percentile(arr, lo=1.0, hi=99.5):
+    """Robust (vmin, vmax) for imshow display via percentiles of non-zero
+    pixels. Falls back to (0, 1) for all-zero crops so imshow doesn't crash.
     """
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.0))
-    panels = [
-        (axes[0], 'mtdna_intensity',  'mtDNA channel',  'tab:blue'),
-        (axes[1], 'mito_intensity',   'Mito channel',   'tab:green'),
-        (axes[2], 'septin_intensity', 'Septin channel', 'tab:red'),
+    vals = arr[arr > 0]
+    if vals.size == 0:
+        return 0.0, 1.0
+    vmin = float(np.percentile(vals, lo))
+    vmax = float(np.percentile(vals, hi))
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+    return vmin, vmax
+
+
+def render_single_nucleoid_radial(
+    out_path, single_df, radius, label,
+    mtdna_vol, mito_vol, septin_vol, z, y, x,
+):
+    """2x3 plot for ONE nucleoid:
+       Top row    = mtDNA / mito / septin radial profile (single sample).
+       Bottom row = 2-channel image crops at the centroid's Z slice, sized
+                    to the scan window:
+                      under mtDNA profile  : mtDNA + mito
+                      under mito profile   : septin + mito
+                      under septin profile : mtDNA + septin
+
+    Each bottom panel overlays the two channels with their conventional
+    colormaps (mtDNA=Blues, mito=Greens, septin=Reds), marks the centroid
+    with a yellow '+', and draws a dashed yellow circle at the scan radius
+    so the radial-profile axis above is visually anchored to the crop.
+
+    `*_vol` are the (Z, Y, X) channel arrays used for display only — pass
+    the raw channels (pre-mean-threshold) so the visualization isn't biased
+    by the zeroing step.
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(15, 9))
+
+    # ---- Top row: radial profile per channel -----------------------------
+    panels_top = [
+        (axes[0, 0], 'mtdna_intensity',  'mtDNA channel',  'tab:blue'),
+        (axes[0, 1], 'mito_intensity',   'Mito channel',   'tab:green'),
+        (axes[0, 2], 'septin_intensity', 'Septin channel', 'tab:red'),
     ]
     distances = single_df['distance'].values
-    for ax, col, title, color in panels:
+    for ax, col, title, color in panels_top:
         ax.plot(distances, single_df[col].values,
                 color=color, linewidth=1.6, marker='o', markersize=3)
         ax.set_xlabel('Distance from centroid (voxels)')
@@ -476,7 +515,50 @@ def render_single_nucleoid_radial(out_path, single_df, radius, label):
         ax.set_title(title)
         ax.set_xlim(0, radius)
         ax.grid(True, alpha=0.3)
-    fig.suptitle(f'Radial profile - {label}')
+
+    # ---- Bottom row: image-context crops centered on the nucleoid --------
+    Z, H, W = mtdna_vol.shape
+    z_disp = int(np.clip(z, 0, Z - 1))
+    y_min = max(0, int(y) - radius)
+    y_max = min(H, int(y) + radius + 1)
+    x_min = max(0, int(x) - radius)
+    x_max = min(W, int(x) + radius + 1)
+
+    mtdna_crop = mtdna_vol[z_disp, y_min:y_max, x_min:x_max]
+    mito_crop = mito_vol[z_disp, y_min:y_max, x_min:x_max]
+    septin_crop = septin_vol[z_disp, y_min:y_max, x_min:x_max]
+
+    # The centroid in cropped (local) coordinates. Because we clipped the
+    # crop to image bounds, the centroid is not necessarily at (radius, radius)
+    # for nucleoids near the volume edge — use the actual offset.
+    cy_local = int(y) - y_min
+    cx_local = int(x) - x_min
+
+    composites = [
+        (axes[1, 0], 'mtDNA + mito',  mtdna_crop, 'Blues',  mito_crop,   'Greens'),
+        (axes[1, 1], 'septin + mito', septin_crop, 'Reds',   mito_crop,   'Greens'),
+        (axes[1, 2], 'mtDNA + septin', mtdna_crop, 'Blues',  septin_crop, 'Reds'),
+    ]
+    for ax, title, img_a, cmap_a, img_b, cmap_b in composites:
+        vmin_a, vmax_a = _clim_percentile(img_a)
+        vmin_b, vmax_b = _clim_percentile(img_b)
+        # Layer A solid, layer B alpha-blended on top.
+        ax.imshow(img_a, cmap=cmap_a, vmin=vmin_a, vmax=vmax_a, alpha=0.75)
+        ax.imshow(img_b, cmap=cmap_b, vmin=vmin_b, vmax=vmax_b, alpha=0.55)
+        # Centroid marker
+        ax.plot(cx_local, cy_local, '+',
+                markeredgecolor='yellow', markersize=12, markeredgewidth=1.6)
+        # Scan radius circle (matches the x-axis range of the radial profile
+        # plotted directly above this panel)
+        ax.add_patch(mpatches.Circle(
+            (cx_local, cy_local), radius,
+            edgecolor='yellow', facecolor='none',
+            linewidth=0.8, linestyle='--', alpha=0.7,
+        ))
+        ax.set_title(f'{title}  (z={z_disp})', fontsize=10)
+        ax.set_xticks([]); ax.set_yticks([])
+
+    fig.suptitle(f'Radial profile + image context - {label}')
     fig.tight_layout()
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
     plt.close(fig)
@@ -720,8 +802,13 @@ def process_one_image_3d(
                     f"nucleoid_{int(nuc_id):03d}_z{z}_y{y}_x{x}.png"
                 )
                 try:
+                    # Pass the RAW channel volumes (pre-mean-threshold) so
+                    # the image-context crops aren't biased by the
+                    # visualization zeroing step. The radial profile values
+                    # in `sub` are unchanged.
                     render_single_nucleoid_radial(
                         out_path, sub, int(punct_scan_radius), label,
+                        mtdna_raw, mito_raw, septin_raw, z, y, x,
                     )
                     n_ok += 1
                 except Exception as exc:
