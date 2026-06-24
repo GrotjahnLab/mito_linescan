@@ -41,7 +41,7 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
   {basename}_analysis.png              the original 2×3 central-slice viz
   {basename}_histogram.png             per-channel intensity histogram
   {basename}_radial_profiles.csv       long-format: image_name, nucleoid_id,
-                                       z, y, x, on_mito, distance,
+                                       z, y, x, on_mito, distance_um,
                                        mtdna_intensity, mito_intensity,
                                        septin_intensity
   {basename}_radial_profiles.png       per-image 3-panel mean ± SEM plot
@@ -76,9 +76,10 @@ Pooled outputs (in {output_dir}/):
   puncta_radial_profiles.png           three-panel mean ± SEM plot
                                        (mtDNA / mito / septin)
 
-Distance is in voxels and assumes isotropic spacing. If your acquisition is
-anisotropic (Z step ≠ XY pixel), scale the profile axis offline or call
-`_radial_profile_3d` with a re-scaled coordinate grid.
+Distance is reported in MICRONS. The radial profile uses the true
+anisotropic Euclidean distance using the voxel sizes supplied via the
+`voxel_size_*_nm` config keys (defaults: 25, 25, 50 nm — typical for 3D
+STED). Bin width = min(vx_um, vy_um), i.e. the finest lateral resolution.
 """
 
 import csv
@@ -262,40 +263,56 @@ def _normalize_3d(ch, mask=None):
     return np.clip((arr - p_lo) / denom, 0.0, 1.0).astype(np.float32)
 
 
-def _radial_profile_3d(image, z0, y0, x0, radius, mask=None):
-    """Mean intensity vs integer 3D distance from `(z0, y0, x0)` to `radius`.
+def _radial_profile_3d(image, z0, y0, x0, radius_voxels,
+                       vx_um, vy_um, vz_um, mask=None):
+    """Mean intensity vs PHYSICAL (micron) distance from the centroid.
 
-    Returns a length-(radius+1) float32 array. Bin `r` contains voxels whose
-    Euclidean distance to the center, rounded to the nearest integer, equals
-    `r`. NaN at radii whose shell has no voxels inside the volume bounds.
+    Returns a length-(radius_voxels+1) float32 array. Bin `r` corresponds to
+    physical distance `r * bin_width_um` µm, where `bin_width_um = min(vx, vy)`
+    (typically the lateral pixel size, the finest resolution). For each
+    voxel in the cubic ±radius_voxels window, the physical Euclidean
+    distance is
 
-    If `mask` is provided (a boolean 3D array the same shape as `image`),
-    voxels outside the mask are excluded from BOTH the sum and the count.
-    Shells with zero voxels inside the mask therefore return NaN. This is
-    how the caller restricts the radial average to "inside the
-    mitochondrion" — pass the scan-time mito mask here.
+        d_um = sqrt((Δz * vz_um)² + (Δy * vy_um)² + (Δx * vx_um)²)
 
-    Same idea as the 2D `_radial_profile` but with a third axis. We compute
-    one volumetric distance map, ravel it, then `np.bincount` over rounded
-    distances for the per-shell mean.
+    which correctly accounts for anisotropic voxel spacing — a unit step in
+    Z covers a different physical distance than a unit step in XY when
+    vz_um ≠ vx_um.
+
+    Voxels with `round(d_um / bin_width_um) > radius_voxels` are dropped
+    (they're beyond the physical scan radius even if they fall inside the
+    cubic voxel window). Shells with no in-mask voxels yield NaN. NaN
+    handling at the pandas pooling stage is unchanged.
     """
     Z, H, W = image.shape
-    z_min = max(0, int(z0) - radius)
-    z_max = min(Z, int(z0) + radius + 1)
-    y_min = max(0, int(y0) - radius)
-    y_max = min(H, int(y0) + radius + 1)
-    x_min = max(0, int(x0) - radius)
-    x_max = min(W, int(x0) + radius + 1)
+    z_min = max(0, int(z0) - radius_voxels)
+    z_max = min(Z, int(z0) + radius_voxels + 1)
+    y_min = max(0, int(y0) - radius_voxels)
+    y_max = min(H, int(y0) + radius_voxels + 1)
+    x_min = max(0, int(x0) - radius_voxels)
+    x_max = min(W, int(x0) + radius_voxels + 1)
 
     if z_max <= z_min or y_max <= y_min or x_max <= x_min:
-        return np.full(radius + 1, np.nan, dtype=np.float32)
+        return np.full(radius_voxels + 1, np.nan, dtype=np.float32)
 
     sub = image[z_min:z_max, y_min:y_max, x_min:x_max].astype(np.float32)
     zz, yy, xx = np.mgrid[z_min:z_max, y_min:y_max, x_min:x_max]
-    d = np.sqrt((zz - z0) ** 2 + (yy - y0) ** 2 + (xx - x0) ** 2).ravel()
-    d_int = np.rint(d).astype(np.int64)
-    valid = d_int <= radius
 
+    # Physical Euclidean distance per voxel, in microns. Anisotropic.
+    d_um = np.sqrt(
+        ((zz - z0) * vz_um) ** 2 +
+        ((yy - y0) * vy_um) ** 2 +
+        ((xx - x0) * vx_um) ** 2
+    ).ravel()
+
+    # Bin into integer multiples of bin_width_um (= min lateral voxel size,
+    # typically vx for vx == vy). Bins 0..radius_voxels span 0..max_distance_um.
+    bin_width_um = float(min(vx_um, vy_um))
+    if bin_width_um <= 0:
+        return np.full(radius_voxels + 1, np.nan, dtype=np.float32)
+    d_int = np.rint(d_um / bin_width_um).astype(np.int64)
+
+    valid = d_int <= radius_voxels
     if mask is not None:
         sub_mask = mask[z_min:z_max, y_min:y_max, x_min:x_max].astype(bool).ravel()
         valid = valid & sub_mask
@@ -303,7 +320,7 @@ def _radial_profile_3d(image, z0, y0, x0, radius, mask=None):
     d_int = d_int[valid]
     vals = sub.ravel()[valid]
 
-    n_bins = radius + 1
+    n_bins = radius_voxels + 1
     counts = np.bincount(d_int, minlength=n_bins)[:n_bins]
     sums = np.bincount(d_int, weights=vals, minlength=n_bins)[:n_bins]
     with np.errstate(invalid='ignore', divide='ignore'):
@@ -314,39 +331,51 @@ def _radial_profile_3d(image, z0, y0, x0, radius, mask=None):
 def compute_radial_profiles_3d(
     coords, on_mito,
     mtdna_n, mito_n, septin_n,
-    radius, basename,
+    radius_voxels, basename,
+    vx_um, vy_um, vz_um,
     scan_mask=None,
 ):
     """Per-nucleoid 3D radial intensity profiles in all three channels.
 
-    Returns a long-format DataFrame with one row per (nucleoid, distance):
-        image_name, nucleoid_id, z, y, x, on_mito, distance,
+    Returns a long-format DataFrame with one row per (nucleoid, distance_um):
+        image_name, nucleoid_id, z, y, x, on_mito, distance_um,
         mtdna_intensity, mito_intensity, septin_intensity
+
+    `distance_um` is the physical distance from the centroid in MICRONS,
+    accounting for anisotropic voxel spacing (vx_um, vy_um, vz_um) — see
+    `_radial_profile_3d`. There are `radius_voxels + 1` bins per nucleoid;
+    bin `r` corresponds to `r * min(vx_um, vy_um)` µm.
 
     `scan_mask` (optional, same shape as the channel volumes) restricts
     every shell average to voxels INSIDE the mask. Typically the caller
     passes a stricter mito mask here so the radial profile reports only
-    intensity inside the mitochondrion. Shells with no in-mask voxels yield
-    NaN; pandas-side `.mean()` and `.sem()` automatically skip these.
+    intensity inside the mitochondrion.
     """
-    cols = ['image_name', 'nucleoid_id', 'z', 'y', 'x', 'on_mito', 'distance',
+    cols = ['image_name', 'nucleoid_id', 'z', 'y', 'x', 'on_mito',
+            'distance_um',
             'mtdna_intensity', 'mito_intensity', 'septin_intensity']
     if coords.shape[0] == 0:
         return pd.DataFrame(columns=cols)
 
     n = coords.shape[0]
-    nb = radius + 1
+    nb = int(radius_voxels) + 1
+    bin_width_um = float(min(vx_um, vy_um))
+    distance_axis_um = np.arange(nb, dtype=np.float32) * bin_width_um
+
     mt = np.empty((n, nb), dtype=np.float32)
     mi = np.empty((n, nb), dtype=np.float32)
     sp = np.empty((n, nb), dtype=np.float32)
     for i in range(n):
         z, y, x = int(coords[i, 0]), int(coords[i, 1]), int(coords[i, 2])
-        mt[i] = _radial_profile_3d(mtdna_n, z, y, x, radius, mask=scan_mask)
-        mi[i] = _radial_profile_3d(mito_n, z, y, x, radius, mask=scan_mask)
-        sp[i] = _radial_profile_3d(septin_n, z, y, x, radius, mask=scan_mask)
+        mt[i] = _radial_profile_3d(mtdna_n, z, y, x, int(radius_voxels),
+                                    vx_um, vy_um, vz_um, mask=scan_mask)
+        mi[i] = _radial_profile_3d(mito_n, z, y, x, int(radius_voxels),
+                                    vx_um, vy_um, vz_um, mask=scan_mask)
+        sp[i] = _radial_profile_3d(septin_n, z, y, x, int(radius_voxels),
+                                    vx_um, vy_um, vz_um, mask=scan_mask)
 
     nucleoid_id = np.repeat(np.arange(n, dtype=np.int64), nb)
-    distance = np.tile(np.arange(nb, dtype=np.int64), n)
+    distance_um = np.tile(distance_axis_um, n)
     z_rep = np.repeat(coords[:, 0].astype(np.int64), nb)
     y_rep = np.repeat(coords[:, 1].astype(np.int64), nb)
     x_rep = np.repeat(coords[:, 2].astype(np.int64), nb)
@@ -359,7 +388,7 @@ def compute_radial_profiles_3d(
         'y': y_rep,
         'x': x_rep,
         'on_mito': on_rep,
-        'distance': distance,
+        'distance_um': distance_um,
         'mtdna_intensity': mt.ravel(),
         'mito_intensity': mi.ravel(),
         'septin_intensity': sp.ravel(),
@@ -513,20 +542,32 @@ def _clim_percentile(arr, lo=1.0, hi=99.5):
     return vmin, vmax
 
 
-def _make_rgb_composite(red_ch=None, green_ch=None, blue_ch=None):
+def _make_rgb_composite(yellow_ch=None, cyan_ch=None, magenta_ch=None):
     """Build a true-color RGB image (black background) from up to three
-    single-channel arrays.
+    fluorescence channels rendered in SECONDARY (CMY) colors.
+
+    Mapping:
+      yellow_ch  -> R + G  (so signal-only pixels look pure yellow)
+      cyan_ch    -> G + B  (so signal-only pixels look pure cyan)
+      magenta_ch -> R + B  (so signal-only pixels look pure magenta)
+
+    Where two channels overlap, the additive combination of their secondary
+    colors produces a clearly different hue, which is much easier to read
+    than overlapping primary colors:
+      yellow + cyan    -> white     (R=1, G=2->clipped to 1, B=1)
+      yellow + magenta -> orange/red-leaning
+      cyan + magenta   -> magenta/blue-leaning
 
     Each input is independently percentile-clipped to [0, 1] before being
-    placed in its color channel; missing channels stay at zero (black). This
-    is the standard fluorescence-style display where the absence of signal
-    is genuine black rather than the white that comes out of single-color
-    sequential matplotlib colormaps like 'Blues' or 'Reds'.
+    additively summed into its two color channels, then the whole image is
+    clipped to [0, 1]. Missing channels stay at zero (black), so the
+    background is genuine black rather than the white floor that sequential
+    matplotlib colormaps like 'Blues' / 'Reds' produce at zero intensity.
 
     Returns a float32 (H, W, 3) array suitable for `imshow`.
     """
     shape = None
-    for ch in (red_ch, green_ch, blue_ch):
+    for ch in (yellow_ch, cyan_ch, magenta_ch):
         if ch is not None:
             shape = ch.shape
             break
@@ -534,14 +575,21 @@ def _make_rgb_composite(red_ch=None, green_ch=None, blue_ch=None):
         return np.zeros((1, 1, 3), dtype=np.float32)
 
     rgb = np.zeros((shape[0], shape[1], 3), dtype=np.float32)
-    for ch_idx, ch in enumerate((red_ch, green_ch, blue_ch)):
+
+    def _add_to_slots(ch, *slots):
         if ch is None:
-            continue
+            return
         vmin, vmax = _clim_percentile(ch)
         denom = max(vmax - vmin, 1e-9)
-        rgb[..., ch_idx] = np.clip((ch.astype(np.float32) - vmin) / denom,
-                                    0.0, 1.0)
-    return rgb
+        v = np.clip((ch.astype(np.float32) - vmin) / denom, 0.0, 1.0)
+        for s in slots:
+            rgb[..., s] += v
+
+    _add_to_slots(yellow_ch, 0, 1)   # R + G
+    _add_to_slots(cyan_ch, 1, 2)     # G + B
+    _add_to_slots(magenta_ch, 0, 2)  # R + B
+
+    return np.clip(rgb, 0.0, 1.0)
 
 
 def render_single_nucleoid_radial(
@@ -575,18 +623,19 @@ def render_single_nucleoid_radial(
 
     # ---- Top row: radial profile per channel -----------------------------
     panels_top = [
-        (axes[0, 0], 'mtdna_intensity',  'mtDNA channel',  'tab:blue'),
+        (axes[0, 0], 'mtdna_intensity',  'mtDNA channel',  'gold'),
         (axes[0, 1], 'mito_intensity',   'Mito channel',   'tab:green'),
-        (axes[0, 2], 'septin_intensity', 'Septin channel', 'tab:red'),
+        (axes[0, 2], 'septin_intensity', 'Septin channel', 'darkcyan'),
     ]
-    distances = single_df['distance'].values
+    distances = single_df['distance_um'].values
+    max_d_um = float(np.max(distances)) if distances.size else 1.0
     for ax, col, title, color in panels_top:
         ax.plot(distances, single_df[col].values,
                 color=color, linewidth=1.6, marker='o', markersize=3)
-        ax.set_xlabel('Distance from centroid (voxels)')
+        ax.set_xlabel('Distance from centroid (µm)')
         ax.set_ylabel('Intensity (normalized)')
         ax.set_title(title)
-        ax.set_xlim(0, radius)
+        ax.set_xlim(0, max_d_um)
         ax.grid(True, alpha=0.3)
 
     # ---- Bottom row: image-context crops centered on the nucleoid --------
@@ -623,7 +672,7 @@ def render_single_nucleoid_radial(
         ax.imshow(rgb_img, interpolation='nearest')
         if mask_crop is not None and mask_crop.any() and not mask_crop.all():
             ax.contour(mask_crop.astype(float), levels=[0.5],
-                       colors='lime', linewidths=1.8, alpha=0.9)
+                       colors='magenta', linewidths=1.8, alpha=0.95)
         ax.plot(cx_local, cy_local, '+',
                 markeredgecolor='yellow', markersize=12, markeredgewidth=1.6)
         ax.add_patch(mpatches.Circle(
@@ -635,14 +684,15 @@ def render_single_nucleoid_radial(
         ax.set_xticks([]); ax.set_yticks([])
 
     # Build true-color RGB composites for the three bottom-row panels.
-    # Black background is automatic because the composite starts from zeros
-    # and the channel data is mapped into the RGB color channels with no
-    # white floor (unlike matplotlib's sequential 'Blues' / 'Reds' cmaps).
+    # Channels are rendered in CMY (secondary) colors so the overlap of
+    # mtDNA (yellow) and septin (cyan) is clearly visible as white:
+    #   mtDNA  -> yellow (R + G)
+    #   septin -> cyan   (G + B)
     rgb_mtdna_septin = _make_rgb_composite(
-        red_ch=septin_crop, blue_ch=mtdna_crop,
+        yellow_ch=mtdna_crop, cyan_ch=septin_crop,
     )
-    rgb_mtdna_only = _make_rgb_composite(blue_ch=mtdna_crop)
-    rgb_septin_only = _make_rgb_composite(red_ch=septin_crop)
+    rgb_mtdna_only = _make_rgb_composite(yellow_ch=mtdna_crop)
+    rgb_septin_only = _make_rgb_composite(cyan_ch=septin_crop)
 
     _draw_panel(axes[1, 0], 'mtDNA + septin (mito outline)', rgb_mtdna_septin)
     _draw_panel(axes[1, 1], 'mtDNA (mito outline)',          rgb_mtdna_only)
@@ -664,13 +714,14 @@ def render_radial_profiles_png(out_path, pooled_df, radius):
     """
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
     panels = [
-        (axes[0], 'mtdna_intensity',  'mtDNA channel',  'tab:blue'),
+        (axes[0], 'mtdna_intensity',  'mtDNA channel',  'gold'),
         (axes[1], 'mito_intensity',   'Mito channel',   'tab:green'),
-        (axes[2], 'septin_intensity', 'Septin channel', 'tab:red'),
+        (axes[2], 'septin_intensity', 'Septin channel', 'darkcyan'),
     ]
     n_nucleoids = pooled_df[['image_name', 'nucleoid_id']].drop_duplicates().shape[0]
+    max_d_um = float(pooled_df['distance_um'].max()) if len(pooled_df) else 1.0
     for ax, col, title, color in panels:
-        grouped = pooled_df.groupby('distance')[col]
+        grouped = pooled_df.groupby('distance_um')[col]
         mean = grouped.mean()
         sem = grouped.sem(ddof=1).fillna(0.0)
         ax.plot(mean.index, mean.values, color=color, linewidth=1.8,
@@ -678,14 +729,14 @@ def render_radial_profiles_png(out_path, pooled_df, radius):
         ax.fill_between(mean.index,
                         (mean - sem).values, (mean + sem).values,
                         color=color, alpha=0.25, linewidth=0)
-        ax.set_xlabel('Distance from mtDNA centroid (voxels)')
+        ax.set_xlabel('Distance from mtDNA centroid (µm)')
         ax.set_ylabel('Mean intensity (normalized)')
         ax.set_title(title)
-        ax.set_xlim(0, radius)
+        ax.set_xlim(0, max_d_um)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
     fig.suptitle(f'3D radial intensity profile around mtDNA nucleoids '
-                 f'(mean ± SEM, R={radius} voxels)')
+                 f'(mean ± SEM, R={max_d_um:.3f} µm)')
     fig.tight_layout()
     plt.savefig(out_path, dpi=200, bbox_inches='tight')
     plt.close(fig)
@@ -710,6 +761,9 @@ def process_one_image_3d(
     min_nucleoid_voxels,
     radial_scan_mito_threshold_percentile,
     radial_scan_mito_dilation,
+    voxel_size_x_nm,
+    voxel_size_y_nm,
+    voxel_size_z_nm,
     save_channel_mrcs_flag,
     save_analysis_png_flag,
     save_histogram_png_flag,
@@ -863,16 +917,26 @@ def process_one_image_3d(
             f"({100.0 * radial_scan_mask.sum() / radial_scan_mask.size:.2f}% of volume)"
         )
 
+        # Voxel sizes: stored in nm in the config, convert to microns here
+        # so the rest of the pipeline (distance axis, plot labels, CSV
+        # column) speaks in physical microns.
+        vx_um = float(voxel_size_x_nm) / 1000.0
+        vy_um = float(voxel_size_y_nm) / 1000.0
+        vz_um = float(voxel_size_z_nm) / 1000.0
+
         on_mito = mito_mask_3d[centroids[:, 0], centroids[:, 1], centroids[:, 2]]
         radial_df = compute_radial_profiles_3d(
             centroids, on_mito, mtdna_n, mito_n, septin_n,
-            radius=int(punct_scan_radius), basename=basename,
+            radius_voxels=int(punct_scan_radius), basename=basename,
+            vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
             scan_mask=radial_scan_mask,
         )
         radial_csv = os.path.join(image_out_dir,
                                    f"{basename}_radial_profiles.csv")
         radial_df.to_csv(radial_csv, index=False)
-        click.echo(f"  wrote radial profiles ({len(radial_df)} rows) -> "
+        max_r_um = float(radial_df['distance_um'].max())
+        click.echo(f"  wrote radial profiles ({len(radial_df)} rows, "
+                   f"R={max_r_um:.3f} µm, bin={min(vx_um, vy_um):.3f} µm) -> "
                    f"{os.path.basename(radial_csv)}")
 
         # Per-image radial profile PNG (mean ± SEM across this image's
@@ -1051,6 +1115,15 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
               show_default=True,
               help='Binary-dilation iterations applied to the scan-time mito '
                    'mask after percentile thresholding.')
+@click.option('--voxel-size-x-nm', default=25.0, type=float, show_default=True,
+              help='Lateral pixel size in nm (X axis). Reported distances '
+                   'are converted to microns using these voxel sizes.')
+@click.option('--voxel-size-y-nm', default=25.0, type=float, show_default=True,
+              help='Lateral pixel size in nm (Y axis); usually equal to X.')
+@click.option('--voxel-size-z-nm', default=50.0, type=float, show_default=True,
+              help='Axial step in nm (Z axis). Typically larger than the '
+                   'lateral pixel size for STED data — the radial profile '
+                   'uses the true anisotropic Euclidean distance.')
 @click.option('--save-channel-mrcs/--no-save-channel-mrcs', default=True,
               help='Write {basename}_{septin|mito|mtDNA}.mrc files per image.')
 @click.option('--save-analysis-png/--no-save-analysis-png', default=True,
@@ -1069,6 +1142,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
          septin_threshold_percentile,
          punct_scan_radius, min_nucleoid_voxels,
          radial_scan_mito_threshold_percentile, radial_scan_mito_dilation,
+         voxel_size_x_nm, voxel_size_y_nm, voxel_size_z_nm,
          save_channel_mrcs, save_analysis_png, save_histogram_png,
          save_per_nucleoid_png):
     """Analyze 3D STED colocalization: mito/mtDNA/septin masks + Area1/Area2
@@ -1102,6 +1176,9 @@ def main(input_dir, input_pattern, output_dir, run_name,
     click.echo(f"  radial-scan mito mask: "
                f"thr@{radial_scan_mito_threshold_percentile}%, "
                f"dilation={radial_scan_mito_dilation}")
+    click.echo(f"  voxel size: x={voxel_size_x_nm:.1f} nm, "
+               f"y={voxel_size_y_nm:.1f} nm, z={voxel_size_z_nm:.1f} nm "
+               f"(distances reported in µm)")
 
     area_rows = []
     radial_dfs = []
@@ -1123,6 +1200,9 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 min_nucleoid_voxels=min_nucleoid_voxels,
                 radial_scan_mito_threshold_percentile=radial_scan_mito_threshold_percentile,
                 radial_scan_mito_dilation=radial_scan_mito_dilation,
+                voxel_size_x_nm=voxel_size_x_nm,
+                voxel_size_y_nm=voxel_size_y_nm,
+                voxel_size_z_nm=voxel_size_z_nm,
                 save_channel_mrcs_flag=save_channel_mrcs,
                 save_analysis_png_flag=save_analysis_png,
                 save_histogram_png_flag=save_histogram_png,

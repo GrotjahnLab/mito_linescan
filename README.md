@@ -250,18 +250,23 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_analysis.png` — 2×3 central-slice visualization
 - `{basename}_histogram.png` — per-channel intensity histogram (log y)
 - `{basename}_radial_profiles.csv` — long-format `image_name, nucleoid_id, z,
-  y, x, on_mito, distance, mtdna_intensity, mito_intensity, septin_intensity`
+  y, x, on_mito, distance_um, mtdna_intensity, mito_intensity,
+  septin_intensity`. `distance_um` is the physical distance in **microns**
+  (computed using the anisotropic voxel sizes from the `voxel_size_*_nm`
+  config keys).
 - `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
   (mtDNA / mito / septin) computed from this image's nucleoids only; same
   visual style as the pooled plot below for easy comparison
 - `per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.png` — 2×3 plot per
-  detected nucleoid. Top row: radial profile in mtDNA / mito / septin.
-  Bottom row: black-background true-color crops at the centroid's Z slice —
-  left = mtDNA+septin, middle = mtDNA alone, right = septin alone. Each
-  bottom panel has the scan-time mito mask drawn as a **lime contour**
-  ("mito outline"), a yellow `+` at the centroid, and a dashed yellow
-  circle at the scan radius. Subdirectory keeps the per-image dir tidy for
-  high-nucleoid images. Disable with `save_per_nucleoid_png: false`.
+  detected nucleoid. Top row: radial profile in mtDNA (gold), mito (green),
+  septin (darkcyan), distance axis in **microns**. Bottom row:
+  black-background true-color crops at the centroid's Z slice with mtDNA in
+  **yellow** (R+G) and septin in **cyan** (G+B) so signal overlap appears
+  white — left = mtDNA+septin, middle = mtDNA alone, right = septin alone.
+  Each bottom panel has the scan-time mito mask drawn as a **magenta
+  contour** ("mito outline"), a yellow `+` at the centroid, and a dashed
+  yellow circle at the scan radius. Subdirectory keeps the per-image dir
+  tidy for high-nucleoid images. Disable with `save_per_nucleoid_png: false`.
 
 Pooled outputs (in `{output_dir}/`):
 - `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios
@@ -290,6 +295,11 @@ sted_colocalization_3d:
   # radial profile (so intensity vs distance reflects mito interior only).
   radial_scan_mito_threshold_percentile: 99
   radial_scan_mito_dilation: 3
+  # Voxel sizes in nanometers. Distances in CSV and plots are reported in
+  # microns; the radial profile uses the true anisotropic Euclidean distance.
+  voxel_size_x_nm: 25
+  voxel_size_y_nm: 25
+  voxel_size_z_nm: 50
   save_channel_mrcs: true
   save_analysis_png: true
   save_histogram_png: true

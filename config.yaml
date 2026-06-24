@@ -147,6 +147,13 @@ sted_colocalization_3d:
   # Independent of mito_threshold_percentile above, which drives Area1/Area2.
   radial_scan_mito_threshold_percentile: 99
   radial_scan_mito_dilation: 3
+  # Voxel sizes in NANOMETERS. The radial profile uses the true anisotropic
+  # Euclidean distance and reports the distance axis (CSV column
+  # `distance_um`, plot x-axis) in MICRONS. Defaults are typical for 3D
+  # STED — adjust to match your acquisition.
+  voxel_size_x_nm: 25
+  voxel_size_y_nm: 25
+  voxel_size_z_nm: 50
   # Output toggles
   save_channel_mrcs: true              # Per-channel float32 MRC exports
   save_analysis_png: true              # 2x3 central-slice visualization
