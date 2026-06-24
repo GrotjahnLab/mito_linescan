@@ -256,13 +256,12 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
   visual style as the pooled plot below for easy comparison
 - `per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.png` — 2×3 plot per
   detected nucleoid. Top row: radial profile in mtDNA / mito / septin.
-  Bottom row: image context — left = mtDNA+mito crop, **middle = zoomed-out
-  full Z slice (mito+mtDNA) with a yellow rectangle marking the scan window
-  and a yellow `+` at the nucleoid centroid**, right = mtDNA+septin crop.
-  Each crop has a yellow `+` centroid marker, dashed yellow scan-radius
-  circle, and white scan-mask boundary contour. Subdirectory keeps the
-  per-image dir tidy for high-nucleoid images. Disable with
-  `save_per_nucleoid_png: false`.
+  Bottom row: black-background true-color crops at the centroid's Z slice —
+  left = mtDNA+septin, middle = mtDNA alone, right = septin alone. Each
+  bottom panel has the scan-time mito mask drawn as a **lime contour**
+  ("mito outline"), a yellow `+` at the centroid, and a dashed yellow
+  circle at the scan radius. Subdirectory keeps the per-image dir tidy for
+  high-nucleoid images. Disable with `save_per_nucleoid_png: false`.
 
 Pooled outputs (in `{output_dir}/`):
 - `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios

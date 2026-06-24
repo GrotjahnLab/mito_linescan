@@ -53,18 +53,17 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                          top row    = radial profile in
                                                       mtDNA / mito / septin
                                                       (single-sample lines)
-                                         bottom row = image-context panels:
-                                          [under mtDNA] mtDNA+mito crop
-                                          [under mito]  zoomed-out FULL Z slice
-                                                       (mito+mtDNA) with a
-                                                       yellow rectangle
-                                                       marking the scan
-                                                       window and a yellow
-                                                       '+' at the centroid
-                                          [under septin] mtDNA+septin crop
-                                       Each crop shows centroid '+', dashed
-                                       yellow scan-radius circle, and white
-                                       scan-mask contour. Lives in a
+                                         bottom row = black-background
+                                                      true-color crops at
+                                                      the centroid's Z slice:
+                                          [under mtDNA]  mtDNA+septin
+                                          [under mito]   mtDNA alone
+                                          [under septin] septin alone
+                                       Each bottom panel has the scan-time
+                                       mito mask drawn as a lime contour
+                                       (mito outline), a yellow '+' at the
+                                       centroid, and a dashed yellow scan-
+                                       radius circle. Lives in a
                                        subdirectory to keep the per-image
                                        dir tidy when an image has many
                                        nucleoids.
@@ -492,7 +491,15 @@ def render_ratios_boxplot(out_path, ratios_a1_mito, ratios_a2_mito):
 
 def _clim_percentile(arr, lo=1.0, hi=99.5):
     """Robust (vmin, vmax) for imshow display via percentiles of non-zero
-    pixels. Falls back to (0, 1) for all-zero crops so imshow doesn't crash.
+    pixels.
+
+    Edge cases handled:
+      - All-zero crop -> (0, 1) so imshow doesn't crash.
+      - Only one (or very few, all-equal) nonzero values -> stretch the
+        range from 0 up to that value rather than collapsing to a near-zero
+        window. Important for sparse channels where there are only a handful
+        of bright voxels in the local crop; otherwise the RGB composite
+        renders them as black.
     """
     vals = arr[arr > 0]
     if vals.size == 0:
@@ -500,8 +507,41 @@ def _clim_percentile(arr, lo=1.0, hi=99.5):
     vmin = float(np.percentile(vals, lo))
     vmax = float(np.percentile(vals, hi))
     if vmax <= vmin:
-        vmax = vmin + 1e-6
+        if vmax > 0:
+            return 0.0, vmax
+        return 0.0, 1.0
     return vmin, vmax
+
+
+def _make_rgb_composite(red_ch=None, green_ch=None, blue_ch=None):
+    """Build a true-color RGB image (black background) from up to three
+    single-channel arrays.
+
+    Each input is independently percentile-clipped to [0, 1] before being
+    placed in its color channel; missing channels stay at zero (black). This
+    is the standard fluorescence-style display where the absence of signal
+    is genuine black rather than the white that comes out of single-color
+    sequential matplotlib colormaps like 'Blues' or 'Reds'.
+
+    Returns a float32 (H, W, 3) array suitable for `imshow`.
+    """
+    shape = None
+    for ch in (red_ch, green_ch, blue_ch):
+        if ch is not None:
+            shape = ch.shape
+            break
+    if shape is None:
+        return np.zeros((1, 1, 3), dtype=np.float32)
+
+    rgb = np.zeros((shape[0], shape[1], 3), dtype=np.float32)
+    for ch_idx, ch in enumerate((red_ch, green_ch, blue_ch)):
+        if ch is None:
+            continue
+        vmin, vmax = _clim_percentile(ch)
+        denom = max(vmax - vmin, 1e-9)
+        rgb[..., ch_idx] = np.clip((ch.astype(np.float32) - vmin) / denom,
+                                    0.0, 1.0)
+    return rgb
 
 
 def render_single_nucleoid_radial(
@@ -511,20 +551,25 @@ def render_single_nucleoid_radial(
 ):
     """2x3 plot for ONE nucleoid:
        Top row    = mtDNA / mito / septin radial profile (single sample).
-       Bottom row = 2-channel image crops at the centroid's Z slice, sized
-                    to the scan window:
-                      under mtDNA profile  : mtDNA + mito
-                      under mito profile   : septin + mito
-                      under septin profile : mtDNA + septin
+       Bottom row = black-background image crops at the centroid's Z slice,
+                    sized to the scan window:
+                      under mtDNA profile  : mtDNA (blue) + septin (red)
+                      under mito profile   : mtDNA only (blue)
+                      under septin profile : septin only (red)
 
-    Each bottom panel overlays the two channels with their conventional
-    colormaps (mtDNA=Blues, mito=Greens, septin=Reds), marks the centroid
-    with a yellow '+', and draws a dashed yellow circle at the scan radius
-    so the radial-profile axis above is visually anchored to the crop.
+    Every bottom panel is a true-color RGB composite (no sequential cmaps
+    with white background) so empty regions are genuine black. On top of
+    each, the scan-time mito-mask boundary is drawn as a thick lime contour
+    — voxels inside that contour are the ones that actually contributed to
+    the radial averages plotted above. A yellow '+' marks the centroid; a
+    dashed yellow circle marks the scan radius.
 
     `*_vol` are the (Z, Y, X) channel arrays used for display only — pass
     the raw channels (pre-mean-threshold) so the visualization isn't biased
-    by the zeroing step.
+    by the zeroing step. `mito_vol` is still accepted for signature
+    stability across callers, even though the new bottom row only renders
+    mtDNA and septin signal directly (the mito information is conveyed by
+    the green mask contour).
     """
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
 
@@ -562,69 +607,46 @@ def render_single_nucleoid_radial(
     cy_local = int(y) - y_min
     cx_local = int(x) - x_min
 
-    # Optional: 2D slice of the scan mask over the crop region. Used as a
-    # contour overlay on the cropped panels so the user can see which voxels
-    # contributed to the radial averages above.
+    # Optional: 2D slice of the scan mask over the crop region. Drawn as a
+    # green contour on each panel so the user can see which voxels actually
+    # contributed to the radial averages plotted above.
     if scan_mask is not None:
         mask_crop = scan_mask[z_disp, y_min:y_max, x_min:x_max]
     else:
         mask_crop = None
 
-    def _draw_crop_panel(ax, title, img_a, cmap_a, img_b, cmap_b):
-        """Cropped 2-channel composite around the nucleoid, with centroid
-        marker, scan-radius circle, and scan-mask contour."""
-        vmin_a, vmax_a = _clim_percentile(img_a)
-        vmin_b, vmax_b = _clim_percentile(img_b)
-        ax.imshow(img_a, cmap=cmap_a, vmin=vmin_a, vmax=vmax_a, alpha=0.75)
-        ax.imshow(img_b, cmap=cmap_b, vmin=vmin_b, vmax=vmax_b, alpha=0.55)
+    def _draw_panel(ax, title, rgb_img):
+        """Display a black-background RGB composite, overlay the mito-mask
+        contour (lime green), and add the centroid marker + scan-radius
+        circle in yellow."""
+        ax.set_facecolor('black')
+        ax.imshow(rgb_img, interpolation='nearest')
         if mask_crop is not None and mask_crop.any() and not mask_crop.all():
             ax.contour(mask_crop.astype(float), levels=[0.5],
-                       colors='white', linewidths=1.8, alpha=0.85)
+                       colors='lime', linewidths=1.8, alpha=0.9)
         ax.plot(cx_local, cy_local, '+',
                 markeredgecolor='yellow', markersize=12, markeredgewidth=1.6)
         ax.add_patch(mpatches.Circle(
             (cx_local, cy_local), radius,
             edgecolor='yellow', facecolor='none',
-            linewidth=0.8, linestyle='--', alpha=0.7,
+            linewidth=0.8, linestyle='--', alpha=0.8,
         ))
-        ax.set_title(f'{title}  (z={z_disp})', fontsize=10)
+        ax.set_title(f'{title}  (z={z_disp})', fontsize=10, color='black')
         ax.set_xticks([]); ax.set_yticks([])
 
-    # Bottom-left: mtDNA + mito crop
-    _draw_crop_panel(axes[1, 0], 'mtDNA + mito',
-                     mtdna_crop, 'Blues', mito_crop, 'Greens')
+    # Build true-color RGB composites for the three bottom-row panels.
+    # Black background is automatic because the composite starts from zeros
+    # and the channel data is mapped into the RGB color channels with no
+    # white floor (unlike matplotlib's sequential 'Blues' / 'Reds' cmaps).
+    rgb_mtdna_septin = _make_rgb_composite(
+        red_ch=septin_crop, blue_ch=mtdna_crop,
+    )
+    rgb_mtdna_only = _make_rgb_composite(blue_ch=mtdna_crop)
+    rgb_septin_only = _make_rgb_composite(red_ch=septin_crop)
 
-    # Bottom-middle: zoomed-out FULL slice for spatial context. Shows mito +
-    # mtDNA over the entire Z slice, with a yellow rectangle marking the
-    # cropped scan region and a yellow '+' at the centroid in full-slice
-    # coordinates. Channel colors match the bottom-left crop so the eye can
-    # easily relate "where the nucleoid is" to "what the crop shows".
-    ax = axes[1, 1]
-    mito_slice_full = mito_vol[z_disp]
-    mtdna_slice_full = mtdna_vol[z_disp]
-    vmin_g, vmax_g = _clim_percentile(mito_slice_full)
-    vmin_b, vmax_b = _clim_percentile(mtdna_slice_full)
-    ax.imshow(mito_slice_full, cmap='Greens',
-              vmin=vmin_g, vmax=vmax_g, alpha=0.75)
-    ax.imshow(mtdna_slice_full, cmap='Blues',
-              vmin=vmin_b, vmax=vmax_b, alpha=0.55)
-    # Yellow rectangle outlining the scan window in full-slice coordinates.
-    # The -0.5 offset puts the edges between pixel boundaries, not on them.
-    ax.add_patch(mpatches.Rectangle(
-        (x_min - 0.5, y_min - 0.5),
-        x_max - x_min, y_max - y_min,
-        edgecolor='yellow', facecolor='none',
-        linewidth=1.5, linestyle='-',
-    ))
-    # Yellow '+' at the centroid in full-slice pixel coordinates.
-    ax.plot(int(x), int(y), '+',
-            markeredgecolor='yellow', markersize=12, markeredgewidth=1.8)
-    ax.set_title(f'Slice context  (z={z_disp})', fontsize=10)
-    ax.set_xticks([]); ax.set_yticks([])
-
-    # Bottom-right: mtDNA + septin crop
-    _draw_crop_panel(axes[1, 2], 'mtDNA + septin',
-                     mtdna_crop, 'Blues', septin_crop, 'Reds')
+    _draw_panel(axes[1, 0], 'mtDNA + septin (mito outline)', rgb_mtdna_septin)
+    _draw_panel(axes[1, 1], 'mtDNA (mito outline)',          rgb_mtdna_only)
+    _draw_panel(axes[1, 2], 'septin (mito outline)',         rgb_septin_only)
 
     fig.suptitle(f'Radial profile + image context - {label}')
     fig.tight_layout()
