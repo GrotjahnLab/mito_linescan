@@ -48,23 +48,26 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        (mtDNA / mito / septin), same render
                                        as the pooled plot but over this
                                        image's nucleoids only
-  per_nucleoid/nucleoid_{id:03d}_z{z}_y{y}_x{x}.png
+  per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.png
                                        2x3 plot per detected mtDNA nucleoid:
                                          top row    = radial profile in
                                                       mtDNA / mito / septin
                                                       (single-sample lines)
-                                         bottom row = 2-channel image crops
-                                                      at the centroid's Z
-                                                      slice, sized to the
-                                                      scan window:
-                                                       under mtDNA   = mtDNA+mito
-                                                       under mito    = septin+mito
-                                                       under septin  = mtDNA+septin
-                                       Centroid marked with a yellow '+';
-                                       dashed yellow circle shows the scan
-                                       radius. Lives in a subdirectory to
-                                       keep the per-image dir tidy when an
-                                       image has many nucleoids.
+                                         bottom row = image-context panels:
+                                          [under mtDNA] mtDNA+mito crop
+                                          [under mito]  zoomed-out FULL Z slice
+                                                       (mito+mtDNA) with a
+                                                       yellow rectangle
+                                                       marking the scan
+                                                       window and a yellow
+                                                       '+' at the centroid
+                                          [under septin] mtDNA+septin crop
+                                       Each crop shows centroid '+', dashed
+                                       yellow scan-radius circle, and white
+                                       scan-mask contour. Lives in a
+                                       subdirectory to keep the per-image
+                                       dir tidy when an image has many
+                                       nucleoids.
 
 Pooled outputs (in {output_dir}/):
   analysis_results.csv                 per-image Area1/Area2/ratio summary
@@ -559,34 +562,26 @@ def render_single_nucleoid_radial(
     cy_local = int(y) - y_min
     cx_local = int(x) - x_min
 
-    composites = [
-        (axes[1, 0], 'mtDNA + mito',  mtdna_crop, 'Blues',  mito_crop,   'Greens'),
-        (axes[1, 1], 'septin + mito', septin_crop, 'Reds',   mito_crop,   'Greens'),
-        (axes[1, 2], 'mtDNA + septin', mtdna_crop, 'Blues',  septin_crop, 'Reds'),
-    ]
-    # Optional: 2D slice of the scan mask over this crop, for the contour
-    # overlay on each image panel. Computed once; reused across panels.
+    # Optional: 2D slice of the scan mask over the crop region. Used as a
+    # contour overlay on the cropped panels so the user can see which voxels
+    # contributed to the radial averages above.
     if scan_mask is not None:
         mask_crop = scan_mask[z_disp, y_min:y_max, x_min:x_max]
     else:
         mask_crop = None
 
-    for ax, title, img_a, cmap_a, img_b, cmap_b in composites:
+    def _draw_crop_panel(ax, title, img_a, cmap_a, img_b, cmap_b):
+        """Cropped 2-channel composite around the nucleoid, with centroid
+        marker, scan-radius circle, and scan-mask contour."""
         vmin_a, vmax_a = _clim_percentile(img_a)
         vmin_b, vmax_b = _clim_percentile(img_b)
-        # Layer A solid, layer B alpha-blended on top.
         ax.imshow(img_a, cmap=cmap_a, vmin=vmin_a, vmax=vmax_a, alpha=0.75)
         ax.imshow(img_b, cmap=cmap_b, vmin=vmin_b, vmax=vmax_b, alpha=0.55)
-        # Scan-mask boundary contour. Only voxels INSIDE this contour
-        # contribute to the radial profile averages shown above the panel.
         if mask_crop is not None and mask_crop.any() and not mask_crop.all():
             ax.contour(mask_crop.astype(float), levels=[0.5],
                        colors='white', linewidths=1.8, alpha=0.85)
-        # Centroid marker
         ax.plot(cx_local, cy_local, '+',
                 markeredgecolor='yellow', markersize=12, markeredgewidth=1.6)
-        # Scan radius circle (matches the x-axis range of the radial profile
-        # plotted directly above this panel)
         ax.add_patch(mpatches.Circle(
             (cx_local, cy_local), radius,
             edgecolor='yellow', facecolor='none',
@@ -594,6 +589,42 @@ def render_single_nucleoid_radial(
         ))
         ax.set_title(f'{title}  (z={z_disp})', fontsize=10)
         ax.set_xticks([]); ax.set_yticks([])
+
+    # Bottom-left: mtDNA + mito crop
+    _draw_crop_panel(axes[1, 0], 'mtDNA + mito',
+                     mtdna_crop, 'Blues', mito_crop, 'Greens')
+
+    # Bottom-middle: zoomed-out FULL slice for spatial context. Shows mito +
+    # mtDNA over the entire Z slice, with a yellow rectangle marking the
+    # cropped scan region and a yellow '+' at the centroid in full-slice
+    # coordinates. Channel colors match the bottom-left crop so the eye can
+    # easily relate "where the nucleoid is" to "what the crop shows".
+    ax = axes[1, 1]
+    mito_slice_full = mito_vol[z_disp]
+    mtdna_slice_full = mtdna_vol[z_disp]
+    vmin_g, vmax_g = _clim_percentile(mito_slice_full)
+    vmin_b, vmax_b = _clim_percentile(mtdna_slice_full)
+    ax.imshow(mito_slice_full, cmap='Greens',
+              vmin=vmin_g, vmax=vmax_g, alpha=0.75)
+    ax.imshow(mtdna_slice_full, cmap='Blues',
+              vmin=vmin_b, vmax=vmax_b, alpha=0.55)
+    # Yellow rectangle outlining the scan window in full-slice coordinates.
+    # The -0.5 offset puts the edges between pixel boundaries, not on them.
+    ax.add_patch(mpatches.Rectangle(
+        (x_min - 0.5, y_min - 0.5),
+        x_max - x_min, y_max - y_min,
+        edgecolor='yellow', facecolor='none',
+        linewidth=1.5, linestyle='-',
+    ))
+    # Yellow '+' at the centroid in full-slice pixel coordinates.
+    ax.plot(int(x), int(y), '+',
+            markeredgecolor='yellow', markersize=12, markeredgewidth=1.8)
+    ax.set_title(f'Slice context  (z={z_disp})', fontsize=10)
+    ax.set_xticks([]); ax.set_yticks([])
+
+    # Bottom-right: mtDNA + septin crop
+    _draw_crop_panel(axes[1, 2], 'mtDNA + septin',
+                     mtdna_crop, 'Blues', septin_crop, 'Reds')
 
     fig.suptitle(f'Radial profile + image context - {label}')
     fig.tight_layout()
@@ -856,8 +887,12 @@ def process_one_image_3d(
                 label = (f"id={int(nuc_id):d} "
                          f"z={z} y={y} x={x} "
                          f"{'on-mito' if on else 'off-mito'}")
+                # Prefix the filename with image basename + run_name so the
+                # file is self-identifying when moved or pooled outside its
+                # per_nucleoid/ directory.
                 out_path = os.path.join(
                     per_nuc_dir,
+                    f"{basename}_{run_name}_"
                     f"nucleoid_{int(nuc_id):03d}_z{z}_y{y}_x{x}.png"
                 )
                 try:
