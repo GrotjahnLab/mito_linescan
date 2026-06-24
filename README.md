@@ -257,7 +257,7 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
   (mtDNA / mito / septin) computed from this image's nucleoids only; same
   visual style as the pooled plot below for easy comparison
-- `per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.png` — 2×3 plot per
+- `per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.{png,svg}` — 2×3 plot per
   detected nucleoid. Top row: radial profile in mtDNA (gold), mito (green),
   septin (darkcyan), distance axis in **microns**. Bottom row:
   black-background true-color crops at the centroid's Z slice with mtDNA in
@@ -265,8 +265,11 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
   white — left = mtDNA+septin, middle = mtDNA alone, right = septin alone.
   Each bottom panel has the scan-time mito mask drawn as a **magenta
   contour** ("mito outline"), a yellow `+` at the centroid, and a dashed
-  yellow circle at the scan radius. Subdirectory keeps the per-image dir
-  tidy for high-nucleoid images. Disable with `save_per_nucleoid_png: false`.
+  yellow circle at the scan radius. **Each nucleoid is written as both PNG
+  and SVG** (same basename, different extension) so you can edit the figure
+  in Illustrator/Inkscape if needed. Subdirectory keeps the per-image dir
+  tidy for high-nucleoid images. Disable both formats with
+  `save_per_nucleoid_png: false`.
 
 Pooled outputs (in `{output_dir}/`):
 - `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios

@@ -48,7 +48,7 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        (mtDNA / mito / septin), same render
                                        as the pooled plot but over this
                                        image's nucleoids only
-  per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.png
+  per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.{png,svg}
                                        2x3 plot per detected mtDNA nucleoid:
                                          top row    = radial profile in
                                                       mtDNA / mito / septin
@@ -60,10 +60,13 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                           [under mito]   mtDNA alone
                                           [under septin] septin alone
                                        Each bottom panel has the scan-time
-                                       mito mask drawn as a lime contour
+                                       mito mask drawn as a magenta contour
                                        (mito outline), a yellow '+' at the
                                        centroid, and a dashed yellow scan-
-                                       radius circle. Lives in a
+                                       radius circle. Each nucleoid is
+                                       saved as BOTH PNG (raster) and SVG
+                                       (vector, editable in
+                                       Illustrator/Inkscape). Lives in a
                                        subdirectory to keep the per-image
                                        dir tidy when an image has many
                                        nucleoids.
@@ -700,7 +703,13 @@ def render_single_nucleoid_radial(
 
     fig.suptitle(f'Radial profile + image context - {label}')
     fig.tight_layout()
+    # Save both PNG (raster, fast to preview) and SVG (vector, editable in
+    # Illustrator/Inkscape and infinitely scalable). The SVG path is derived
+    # from the PNG path by swapping the extension, so the two files live
+    # side-by-side with the same basename.
     plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    svg_path = os.path.splitext(out_path)[0] + '.svg'
+    plt.savefig(svg_path, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -999,10 +1008,10 @@ def process_one_image_3d(
                     n_fail += 1
                     if n_fail <= 3:
                         click.echo(f"  per-nucleoid PNG {nuc_id} failed: {exc}")
-            click.echo(f"  wrote {n_ok} per-nucleoid radial PNGs to "
-                       f"per_nucleoid/ ({n_fail} failed)" if n_fail
-                       else f"  wrote {n_ok} per-nucleoid radial PNGs to "
-                            f"per_nucleoid/")
+            click.echo(f"  wrote {n_ok} per-nucleoid figures (PNG + SVG each) "
+                       f"to per_nucleoid/ ({n_fail} failed)" if n_fail
+                       else f"  wrote {n_ok} per-nucleoid figures "
+                            f"(PNG + SVG each) to per_nucleoid/")
 
     return area_row, radial_df
 
