@@ -44,6 +44,14 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        z, y, x, on_mito, distance_um,
                                        mtdna_intensity, mito_intensity,
                                        septin_intensity
+  {basename}_half_max_distances.csv    wide-format, one row per nucleoid:
+                                       image_name, nucleoid_id, z, y, x,
+                                       on_mito, mtdna_half_max_um,
+                                       mito_half_max_um, septin_half_max_um
+                                       (distance where each channel's
+                                       radial profile first crosses half
+                                       of its peak, linearly interpolated
+                                       between the two bracketing bins)
   {basename}_radial_profiles.png       per-image 3-panel mean ± SEM plot
                                        (mtDNA / mito / septin), same render
                                        as the pooled plot but over this
@@ -76,8 +84,12 @@ Pooled outputs (in {output_dir}/):
                                        (same schema as the original script)
   septin_ratios_boxplot.png            boxplot of Area1/mito vs Area2/mito
   puncta_radial_profiles_pooled.csv    every per-image radial profile concatenated
-  puncta_radial_profiles.png           three-panel mean ± SEM plot
-                                       (mtDNA / mito / septin)
+  puncta_radial_profiles.png / .svg    three-panel mean ± SEM plot
+                                       (mtDNA / mito / septin) with a
+                                       vertical dashed line at each
+                                       channel's half-max distance
+                                       computed on the mean curve
+  puncta_half_max_distances_pooled.csv every per-image half-max CSV concatenated
 
 Distance is reported in MICRONS. The radial profile uses the true
 anisotropic Euclidean distance using the voxel sizes supplied via the
@@ -398,6 +410,80 @@ def compute_radial_profiles_3d(
     })
 
 
+# -------- half-max distance ------------------------------------------------
+
+def _half_max_distance(distances, intensities):
+    """First distance at which the profile crosses below max/2.
+
+    Given paired (distance, intensity) arrays, find the smallest distance
+    where the intensity has fallen below half of the profile's peak value.
+    The crossing is linearly interpolated between the two bracketing bins
+    for sub-bin precision.
+
+    Returns:
+        Interpolated crossing distance in the units of `distances`, or NaN
+        if the profile has fewer than 2 valid (non-NaN) samples, its peak
+        is ≤ 0, or it never falls below max/2 within the sampled range.
+    """
+    d = np.asarray(distances, dtype=np.float64)
+    i = np.asarray(intensities, dtype=np.float64)
+    mask = ~np.isnan(i)
+    if mask.sum() < 2:
+        return np.nan
+    d = d[mask]
+    i = i[mask]
+    max_i = float(np.max(i))
+    if max_i <= 0.0:
+        return np.nan
+    half = max_i / 2.0
+    below = i < half
+    if not np.any(below):
+        return np.nan
+    first_below = int(np.argmax(below))
+    if first_below == 0:
+        return float(d[0])
+    d1, d2 = float(d[first_below - 1]), float(d[first_below])
+    i1, i2 = float(i[first_below - 1]), float(i[first_below])
+    if i1 == i2:
+        return d1
+    frac = (i1 - half) / (i1 - i2)
+    return d1 + frac * (d2 - d1)
+
+
+def compute_half_max_distances(radial_df):
+    """Per-nucleoid half-maximum distance for each channel.
+
+    Given the long-format radial profile DataFrame produced by
+    `compute_radial_profiles_3d`, compute one row per unique nucleoid with
+    the half-max distance in each of the three channels. Rows are ordered
+    by (image_name, nucleoid_id).
+
+    Returned schema:
+        image_name, nucleoid_id, z, y, x, on_mito,
+        mtdna_half_max_um, mito_half_max_um, septin_half_max_um
+    """
+    cols = ['image_name', 'nucleoid_id', 'z', 'y', 'x', 'on_mito',
+            'mtdna_half_max_um', 'mito_half_max_um', 'septin_half_max_um']
+    if len(radial_df) == 0:
+        return pd.DataFrame(columns=cols)
+
+    rows = []
+    for (image, nid), grp in radial_df.groupby(['image_name', 'nucleoid_id']):
+        d = grp['distance_um'].values
+        rows.append({
+            'image_name': image,
+            'nucleoid_id': int(nid),
+            'z': int(grp['z'].iloc[0]),
+            'y': int(grp['y'].iloc[0]),
+            'x': int(grp['x'].iloc[0]),
+            'on_mito': bool(grp['on_mito'].iloc[0]),
+            'mtdna_half_max_um': _half_max_distance(d, grp['mtdna_intensity'].values),
+            'mito_half_max_um': _half_max_distance(d, grp['mito_intensity'].values),
+            'septin_half_max_um': _half_max_distance(d, grp['septin_intensity'].values),
+        })
+    return pd.DataFrame(rows, columns=cols)
+
+
 # -------- visualization (preserves original 2x3 panel + histogram) ---------
 
 def render_analysis_png(
@@ -633,8 +719,21 @@ def render_single_nucleoid_radial(
     distances = single_df['distance_um'].values
     max_d_um = float(np.max(distances)) if distances.size else 1.0
     for ax, col, title, color in panels_top:
-        ax.plot(distances, single_df[col].values,
+        y_values = single_df[col].values
+        ax.plot(distances, y_values,
                 color=color, linewidth=1.6, marker='o', markersize=3)
+        # Vertical dashed line at the half-max distance for THIS nucleoid
+        # and THIS channel. Text annotation shows the numeric value inline
+        # near the top of the line.
+        hm = _half_max_distance(distances, y_values)
+        if not np.isnan(hm):
+            ax.axvline(hm, color=color, linestyle='--',
+                       linewidth=1.2, alpha=0.75)
+            y_top = np.nanmax(y_values) if np.any(~np.isnan(y_values)) else 1.0
+            ax.text(hm, y_top, f' HM={hm:.3f} µm',
+                    color=color, fontsize=8, va='top', ha='left',
+                    bbox=dict(facecolor='white', edgecolor='none',
+                              alpha=0.7, pad=1))
         ax.set_xlabel('Distance from centroid (µm)')
         ax.set_ylabel('Intensity (normalized)')
         ax.set_title(title)
@@ -733,11 +832,21 @@ def render_radial_profiles_png(out_path, pooled_df, radius):
         grouped = pooled_df.groupby('distance_um')[col]
         mean = grouped.mean()
         sem = grouped.sem(ddof=1).fillna(0.0)
+        # Half-max distance computed on the AGGREGATE MEAN curve — matches
+        # what you'd read visually off the plotted line.
+        hm = _half_max_distance(mean.index.values, mean.values)
+        line_label = f'n={n_nucleoids} nucleoids'
+        if not np.isnan(hm):
+            line_label += f'  |  HM = {hm:.3f} µm'
         ax.plot(mean.index, mean.values, color=color, linewidth=1.8,
-                label=f'n={n_nucleoids} nucleoids')
+                label=line_label)
         ax.fill_between(mean.index,
                         (mean - sem).values, (mean + sem).values,
                         color=color, alpha=0.25, linewidth=0)
+        # Vertical dashed line at the half-max distance of the mean curve.
+        if not np.isnan(hm):
+            ax.axvline(hm, color=color, linestyle='--',
+                       linewidth=1.2, alpha=0.7)
         ax.set_xlabel('Distance from mtDNA centroid (µm)')
         ax.set_ylabel('Mean intensity (normalized)')
         ax.set_title(title)
@@ -747,7 +856,11 @@ def render_radial_profiles_png(out_path, pooled_df, radius):
     fig.suptitle(f'3D radial intensity profile around mtDNA nucleoids '
                  f'(mean ± SEM, R={max_d_um:.3f} µm)')
     fig.tight_layout()
+    # Save both PNG (raster) and SVG (vector) for consistency with the
+    # per-nucleoid plots.
     plt.savefig(out_path, dpi=200, bbox_inches='tight')
+    svg_path = os.path.splitext(out_path)[0] + '.svg'
+    plt.savefig(svg_path, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -896,6 +1009,7 @@ def process_one_image_3d(
     click.echo(f"  found {centroids.shape[0]} mtDNA nucleoid centroids "
                f"(min_voxels={min_nucleoid_voxels})")
 
+    half_max_df = None  # populated in the else-branch below when we have data
     if centroids.shape[0] == 0:
         radial_df = None
         radial_scan_mask = None
@@ -947,6 +1061,17 @@ def process_one_image_3d(
         click.echo(f"  wrote radial profiles ({len(radial_df)} rows, "
                    f"R={max_r_um:.3f} µm, bin={min(vx_um, vy_um):.3f} µm) -> "
                    f"{os.path.basename(radial_csv)}")
+
+        # Per-nucleoid half-max distances (wide format, one row per nucleoid).
+        # Independent from the radial CSV but derived from it — makes it easy
+        # to compare "how localized is mtDNA vs septin around each nucleoid"
+        # without pivoting the long-format table yourself.
+        half_max_df = compute_half_max_distances(radial_df)
+        half_max_csv = os.path.join(image_out_dir,
+                                     f"{basename}_half_max_distances.csv")
+        half_max_df.to_csv(half_max_csv, index=False)
+        click.echo(f"  wrote half-max distances ({len(half_max_df)} nucleoids) "
+                   f"-> {os.path.basename(half_max_csv)}")
 
         # Per-image radial profile PNG (mean ± SEM across this image's
         # nucleoids). Reuses the same render helper as the pooled output so
@@ -1013,7 +1138,7 @@ def process_one_image_3d(
                        else f"  wrote {n_ok} per-nucleoid figures "
                             f"(PNG + SVG each) to per_nucleoid/")
 
-    return area_row, radial_df
+    return area_row, radial_df, half_max_df
 
 
 # -------- pooled outputs ---------------------------------------------------
@@ -1054,6 +1179,32 @@ def _save_septin_ratios_boxplot(results, output_dir, mtdna_threshold, mtdna_dila
         f"  Area2/mito: mean={np.mean(a2_over_mito):.3f} "
         f"median={np.median(a2_over_mito):.3f} std={np.std(a2_over_mito):.3f}"
     )
+
+
+def _save_half_max_pooled(per_image_half_max_dfs, output_dir):
+    """Pool per-image half-max DataFrames into
+    `puncta_half_max_distances_pooled.csv` and print a brief console summary
+    so the user has an at-a-glance mean/median for each channel."""
+    if not per_image_half_max_dfs:
+        click.echo("No half-max distances to pool; skipping.")
+        return
+    pooled = pd.concat(per_image_half_max_dfs, ignore_index=True)
+    out = os.path.join(output_dir, 'puncta_half_max_distances_pooled.csv')
+    pooled.to_csv(out, index=False)
+    click.echo(f"Wrote pooled half-max CSV -> {out}")
+
+    def _summary(col):
+        vals = pooled[col].dropna().values
+        if vals.size == 0:
+            return f'  {col}: no valid samples'
+        return (f'  {col}: n={vals.size}, '
+                f'mean={vals.mean():.3f} µm, '
+                f'median={float(np.median(vals)):.3f} µm, '
+                f'std={vals.std(ddof=1):.3f} µm')
+    click.echo('  half-max distance summary (µm):')
+    click.echo(_summary('mtdna_half_max_um'))
+    click.echo(_summary('mito_half_max_um'))
+    click.echo(_summary('septin_half_max_um'))
 
 
 def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
@@ -1191,9 +1342,10 @@ def main(input_dir, input_pattern, output_dir, run_name,
 
     area_rows = []
     radial_dfs = []
+    half_max_dfs = []
     for image_path in image_list:
         try:
-            area_row, radial_df = process_one_image_3d(
+            area_row, radial_df, half_max_df = process_one_image_3d(
                 image_path,
                 output_dir=out_dir,
                 run_name=run_name,
@@ -1225,6 +1377,8 @@ def main(input_dir, input_pattern, output_dir, run_name,
             area_rows.append(area_row)
         if radial_df is not None and len(radial_df):
             radial_dfs.append(radial_df)
+        if half_max_df is not None and len(half_max_df):
+            half_max_dfs.append(half_max_df)
 
     # Pooled outputs.
     _save_area_results_csv(area_rows, out_dir)
@@ -1232,6 +1386,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
                                  mtdna_threshold_percentile, mtdna_dilation)
     _save_radial_profile_outputs_3d(radial_dfs, out_dir,
                                      radius=int(punct_scan_radius))
+    _save_half_max_pooled(half_max_dfs, out_dir)
     click.echo(f"\nProcessed {len(image_list)} TIFF(s). Outputs in {out_dir}")
 
 

@@ -254,6 +254,12 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
   septin_intensity`. `distance_um` is the physical distance in **microns**
   (computed using the anisotropic voxel sizes from the `voxel_size_*_nm`
   config keys).
+- `{basename}_half_max_distances.csv` — wide-format, one row per nucleoid:
+  `image_name, nucleoid_id, z, y, x, on_mito, mtdna_half_max_um,
+  mito_half_max_um, septin_half_max_um`. For each channel, the distance in
+  microns at which that nucleoid's radial profile first drops below half
+  its peak (linearly interpolated between the two bracketing bins). NaN
+  when the profile never falls below half-max within the scan radius.
 - `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
   (mtDNA / mito / septin) computed from this image's nucleoids only; same
   visual style as the pooled plot below for easy comparison
@@ -275,8 +281,12 @@ Pooled outputs (in `{output_dir}/`):
 - `analysis_results.csv` — per-image Area1/Area2 voxel counts + ratios
 - `septin_ratios_boxplot_<thr>_<dilation>.png` — Area1/mito vs Area2/mito
 - `puncta_radial_profiles_pooled.csv` — every per-image radial CSV pooled
-- `puncta_radial_profiles.png` — three-panel mean ± SEM plot (mtDNA / mito /
-  septin)
+- `puncta_radial_profiles.png` **and** `.svg` — three-panel mean ± SEM plot
+  (mtDNA / mito / septin) with a **vertical dashed line** at each channel's
+  half-max distance (computed on the mean curve; value shown in the legend)
+- `puncta_half_max_distances_pooled.csv` — every per-image half-max CSV
+  concatenated; also prints mean/median/std per channel to the console at
+  the end of the run
 
 ```yaml
 sted_colocalization_3d:
