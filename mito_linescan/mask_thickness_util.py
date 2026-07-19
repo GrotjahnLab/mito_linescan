@@ -29,7 +29,7 @@ directly:
 
 or without the console_scripts shim:
 
-    python -m bin.mask_thickness_util --input-dir <dir>
+    python -m mito_linescan.mask_thickness_util --input-dir <dir>
 
 Input dimensionality is auto-detected per file:
   - 2D (H, W)         : mask directly

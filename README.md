@@ -54,6 +54,33 @@ This creates a conda environment named `mito_protein_scanner` with all required 
 conda activate mito_protein_scanner
 ```
 
+### 4. Install the Package (editable)
+
+The conda environment above already installs this package in **editable**
+mode (`environment.yml` ends with `pip: -e .`), so if you created the env
+with `conda env create -f environment.yml` you are already set. To (re)install
+manually, always use editable mode, from the directory that contains
+`setup.py`:
+
+```bash
+cd mito_linescan          # the folder with setup.py
+pip install -e .
+```
+
+Editable mode links the installed package to this source tree, so your edits
+and `git pull`s take effect immediately with no reinstall. **Do not** use
+`pip install .` or `python setup.py install` — those copy a *snapshot* into
+`site-packages`, which then goes stale and silently shadows your source (you
+edit the repo, but the old copy is what actually runs). If you ever hit an
+error like `No such option: --…` for an option you know you added, this is
+almost certainly the cause: reinstall with `pip install -e .`. To confirm
+which code is live, run this from **outside** the source folder — it should
+print a path inside your repo, not `site-packages`:
+
+```bash
+python -c "import mito_linescan.sted_colocalization_3d as m; print(m.__file__)"
+```
+
 ## Configuration-Based Workflow
 
 The recommended way to use this tool is through the YAML configuration file, which enables reproducible analysis with all parameters in one place.
@@ -429,20 +456,22 @@ mito_protein_localization --config config.yaml analyze_omm_scans
 
 ## Direct Script Usage (Advanced)
 
-For advanced use cases, you can still call individual scripts directly:
+For advanced use cases, you can still call individual modules directly. Run
+them with `python -m` (they are a package now, so `python path/to/file.py`
+will not resolve the intra-package imports):
 
 ```bash
-python bin/mito_mask.py --i /path/to/input --o /path/to/output
-python bin/mito_mask_refine.py --i /path/to/input --o /path/to/output
-python bin/mito_protein_omm_normal_scanner.py --i /path/to/input --o /path/to/output
-python bin/mito_protein_line_scanner.py --input-dir /path/to/input
+python -m mito_linescan.mito_mask --i /path/to/input --o /path/to/output
+python -m mito_linescan.mito_mask_refine --i /path/to/input --o /path/to/output
+python -m mito_linescan.mito_protein_omm_normal_scanner --i /path/to/input --o /path/to/output
+python -m mito_linescan.mito_protein_line_scanner --input-dir /path/to/input
 ```
 
-View help for individual scripts:
+View help for individual modules:
 
 ```bash
-python bin/mito_protein_line_scanner.py --help
-python bin/mito_protein_omm_normal_scanner.py --help
+python -m mito_linescan.mito_protein_line_scanner --help
+python -m mito_linescan.mito_protein_omm_normal_scanner --help
 ```
 
 ## Configuration File Reference
@@ -545,7 +574,7 @@ data/
 ### Command not found: mito_protein_localization
 - Ensure the environment is activated: `conda activate mito_protein_scanner`
 - Verify installation completed successfully
-- Try: `python -m bin.mito_protein_localization --help`
+- Try: `python -m mito_linescan.mito_protein_localization --help`
 
 ### YAML parsing errors
 - Verify YAML indentation uses 2 spaces (not tabs)

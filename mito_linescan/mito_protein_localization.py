@@ -11,7 +11,7 @@ import click
 import yaml
 from pathlib import Path
 
-# NOTE: the workflow modules (bin.mito_mask, bin.mito_protein_line_scanner, ...)
+# NOTE: the workflow modules (mito_linescan.mito_mask, mito_linescan.mito_protein_line_scanner, ...)
 # pull in the full scientific stack (numpy, scipy, scikit-image, matplotlib,
 # sknw, pandas, tifffile, networkx, ...). Importing them at module load adds
 # multiple seconds of startup cost to *every* invocation of this CLI, including
@@ -137,7 +137,7 @@ def draw_mask(ctx, config):
     click.echo(f"Running draw_mask with config: {draw_mask_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.mito_mask import main as mito_mask_main
+    from mito_linescan.mito_mask import main as mito_mask_main
 
     # Call the original mito_mask main function with args
     sys.argv = ['mito_mask'] + args
@@ -163,7 +163,7 @@ def refine_mask(ctx, config):
     click.echo(f"Running refine_mask with config: {refine_mask_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.mito_mask_refine import main as mito_mask_refine_main
+    from mito_linescan.mito_mask_refine import main as mito_mask_refine_main
 
     # Call the original mito_mask_refine main function with args
     sys.argv = ['mito_mask_refine'] + args
@@ -189,7 +189,7 @@ def omm_normal_scan(ctx, config):
     click.echo(f"Running omm_normal_scan with config: {omm_normal_scan_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.mito_protein_omm_normal_scanner import main as mito_protein_omm_normal_scanner_main
+    from mito_linescan.mito_protein_omm_normal_scanner import main as mito_protein_omm_normal_scanner_main
 
     # Call the original mito_protein_omm_normal_scanner main function with args
     sys.argv = ['mito_protein_omm_normal_scanner'] + args
@@ -215,7 +215,7 @@ def network_line_scan(ctx, config):
     click.echo(f"Running network_line_scan with config: {network_line_scan_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.mito_protein_line_scanner import main as mito_protein_line_scanner_main
+    from mito_linescan.mito_protein_line_scanner import main as mito_protein_line_scanner_main
 
     # Call the original mito_protein_line_scanner main function with args
     sys.argv = ['mito_protein_line_scanner'] + args
@@ -247,7 +247,7 @@ def analyze_omm_scans(ctx, config):
     click.echo(f"Running analyze_omm_scans with config: input_directory={input_directory}, output_directory={output_directory}, peak_threshold={peak_threshold}, peak_prominence={peak_prominence}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.analyze_omm_scans import process_directory as analyze_omm_scans_main
+    from mito_linescan.analyze_omm_scans import process_directory as analyze_omm_scans_main
 
     # Call the analyze_omm_scans function
     analyze_omm_scans_main(input_directory, output_directory, peak_threshold, peak_prominence)
@@ -273,7 +273,7 @@ def puncta_nn_scan(ctx, config):
     click.echo(f"Running puncta_nn_scan with config: {puncta_nn_scan_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.puncta_nn_scan import main as puncta_nn_scan_main
+    from mito_linescan.puncta_nn_scan import main as puncta_nn_scan_main
 
     sys.argv = ['puncta_nn_scan'] + args
     puncta_nn_scan_main(standalone_mode=False)
@@ -300,7 +300,7 @@ def sted_colocalization_3d(ctx, config):
     click.echo(f"Running sted_colocalization_3d with config: {sted_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.sted_colocalization_3d import main as sted_3d_main
+    from mito_linescan.sted_colocalization_3d import main as sted_3d_main
 
     sys.argv = ['sted_colocalization_3d'] + args
     sted_3d_main(standalone_mode=False)
@@ -325,7 +325,7 @@ def plot_peak_distance_analysis(ctx, config):
     click.echo(f"Running plot_peak_distance_analysis with config: {plot_config}")
 
     # Lazy import: only load the heavy workflow when this command runs.
-    from bin.plot_peak_distance_analysis import main as plot_peak_distance_analysis_main
+    from mito_linescan.plot_peak_distance_analysis import main as plot_peak_distance_analysis_main
 
     # Call the plot_peak_distance_analysis main function with args
     sys.argv = ['plot_peak_distance_analysis'] + args

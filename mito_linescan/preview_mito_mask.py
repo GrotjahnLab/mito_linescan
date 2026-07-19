@@ -7,7 +7,7 @@ approach used in mito_protein_line_scanner.py. Run this under the
 `mito_protein_scanner` conda env.
 
 Usage:
-    python bin/preview_mito_mask.py \
+    python -m mito_linescan.preview_mito_mask \
         --input  /path/to/file.tif \
         --output /path/to/previews/  \
         --mito-channel 0
