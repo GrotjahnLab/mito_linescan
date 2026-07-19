@@ -178,6 +178,42 @@ def read_3d_tiff(path, expected_channels=3):
     return channel_data, (z_slices, num_channels, height, width)
 
 
+def validate_channel_order(channel_arrays,
+                           channel_names=("mtDNA", "mito", "septin"),
+                           *, log=print):
+    """SCI-2: surface (never change) the fixed channel-order assumption.
+
+    The pipeline assumes 0=mtDNA, 1=mito, 2=septin. This does NOT read metadata
+    or reorder anything — it logs the assumed label for each channel with its
+    per-channel intensity ranges (min/max + 1/50/99 percentiles) and emits a
+    WARNING (not an error) when a channel looks empty or degenerate, which is
+    the tell-tale sign of a wrong channel mapping. Returns the warnings emitted.
+    """
+    warnings = []
+    for idx, name in enumerate(channel_names):
+        if idx >= len(channel_arrays):
+            continue
+        arr = np.asarray(channel_arrays[idx], dtype=np.float64)
+        if arr.size == 0:
+            log(f"  channel {idx} -> {name}: <empty array>")
+            warnings.append(f"channel {idx} ({name}) is empty (no voxels)")
+            continue
+        cmin, cmax = float(arr.min()), float(arr.max())
+        p1, p50, p99 = (float(np.percentile(arr, q)) for q in (1, 50, 99))
+        log(f"  channel {idx} -> {name}: min={cmin:.3g} max={cmax:.3g} "
+            f"p1={p1:.3g} p50={p50:.3g} p99={p99:.3g}")
+        if cmax <= cmin:
+            warnings.append(
+                f"channel {idx} ({name}) is empty or constant (min==max=={cmin:.3g})")
+        elif p99 <= p1:
+            warnings.append(
+                f"channel {idx} ({name}) has a degenerate intensity range "
+                f"(p1={p1:.3g} >= p99={p99:.3g})")
+    for w in warnings:
+        log(f"  WARNING: channel-order check — {w}")
+    return warnings
+
+
 def threshold_above_mean(ch):
     """Return a copy of `ch` with everything ≤ mean(ch) set to zero.
 
@@ -1141,6 +1177,10 @@ def process_one_image_3d(
     mtdna_raw = channel_data[mtdna_channel]
     mito_raw = channel_data[mito_channel]
     septin_raw = channel_data[protein_channel]
+
+    # SCI-2: log the assumed channel->label mapping + ranges and warn on
+    # implausible channels. Does not reorder or read metadata.
+    validate_channel_order([mtdna_raw, mito_raw, septin_raw], log=click.echo)
 
     # ---- visualization-prep thresholding (kept identical to original) ----
     mtdna_ch, mtdna_avg = threshold_above_mean(mtdna_raw)
