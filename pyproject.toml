@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Phase-1 regression harness. Phase 2 grows this into a full suite + CI.
+testpaths = ["tests"]
+addopts = "-ra"

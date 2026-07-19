@@ -137,3 +137,6 @@ example/
 *.swp
 *.swo
 *~
+
+# Local read-only audit findings (never committed)
+audit/
