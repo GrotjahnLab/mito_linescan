@@ -2,6 +2,7 @@
 import sys
 import os
 import glob
+from typing import NamedTuple
 
 import click
 import tqdm
@@ -31,6 +32,21 @@ from skimage.morphology import skeletonize
 import sknw
 
 from scipy.signal import find_peaks, peak_prominences
+
+
+class MitoMaskResult(NamedTuple):
+    """Return type of the ridge-filter mask builders.
+
+    BP-2: producing a named 5-tuple means a caller that unpacks the wrong
+    number of values fails loudly at the call site instead of silently
+    mis-binding fields.
+    """
+    threshold: float
+    binary: object
+    skeleton: object
+    graph: object
+    params: dict
+
 
 # Global variables for colormaps (initialized on first use)
 _mito_cmap = None
@@ -990,7 +1006,7 @@ def select_mask_gui(
         'max_thickness':      float(state['max_thick']),
         'ridge_threshold':    float(threshold_value),
     }
-    return float(threshold_value), binary_final, skel, graph, final_params
+    return MitoMaskResult(float(threshold_value), binary_final, skel, graph, final_params)
 
 
 def compute_mito_mask_noninteractive(
@@ -1080,7 +1096,7 @@ def compute_mito_mask_noninteractive(
         'max_thickness':        float(max_thickness),
         'ridge_threshold':      float(thr),
     }
-    return float(thr), bn_final, skel, graph, final_params
+    return MitoMaskResult(float(thr), bn_final, skel, graph, final_params)
 
 
 def process_images(
