@@ -2,6 +2,8 @@
 Shared utility functions for mitochondrial analysis tools.
 """
 
+# NOTE: no-op change to verify the automated Claude code review workflow.
+
 import numpy as np
 from matplotlib.colors import ListedColormap
 
