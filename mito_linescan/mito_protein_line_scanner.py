@@ -1395,7 +1395,6 @@ def process_images(
 @click.option('--mask-channel', default=None, type=int,
               help='0-based index of a channel to use as the cell mask (Otsu threshold). '
                    'Takes priority over --mask-dir-input and lasso drawing.')
-@click.option('--use-gui/--no-gui', default=True, help='Use interactive GUI for threshold selection')
 @click.option('--scan-width', default=4, type=int, help='Pixels on each side of the path for scanning')
 @click.option('--path-sampling', default=5, type=int, help='Number of subpixel samples along the normal')
 @click.option('--min-path-length', default=30, type=int, help='Minimum path length to process')
@@ -1428,7 +1427,7 @@ def process_images(
                    '(post-thickness-filter) as `{basename}_mito_binary.tif` '
                    '(uint8, 0/255). Leave empty to skip saving.')
 def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
-         mito_channel, protein_channel, mask_channel, use_gui, scan_width, path_sampling,
+         mito_channel, protein_channel, mask_channel, scan_width, path_sampling,
          min_path_length, tubule_radius, sensitivity, min_object_size,
          gap_closing, use_thickness_filter, min_thickness, max_thickness,
          binary_mask_dir_output):
@@ -1450,7 +1449,11 @@ def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
         run_name=run_name,
         mito_ch=mito_channel,
         protein_ch=protein_channel,
-        use_threshold_gui=use_gui,
+        # DEBT-1/BP-1: the --use-gui/--no-gui flag was removed because
+        # config_to_args emitted --no-use-gui, which never matched. The
+        # network_line_scan CLI is headless-only; the interactive GUI path is
+        # still reachable via select_mask_gui in the library API.
+        use_threshold_gui=False,
         scan_width=scan_width,
         path_sampling=path_sampling,
         min_path_length=min_path_length,
