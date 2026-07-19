@@ -113,7 +113,6 @@ import os
 import click
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
-import mrcfile
 import numpy as np
 import pandas as pd
 import tifffile
@@ -192,7 +191,19 @@ def threshold_above_mean(ch):
 
 
 def save_channel_mrcs(output_path, basename, channel_arrays, channel_names):
-    """Write each (Z, Y, X) channel array as a single-channel float32 MRC."""
+    """Write each (Z, Y, X) channel array as a single-channel float32 MRC.
+
+    DEP-2/BP-11: `mrcfile` is imported lazily so the module (and every workflow
+    that imports it) loads even when `mrcfile` isn't installed. If it's absent,
+    skip the MRC export with a message instead of crashing — mirrors the
+    `localthickness` optional-dependency pattern in mito_protein_line_scanner.
+    """
+    try:
+        import mrcfile
+    except ImportError as exc:
+        print(f"  [mrc] mrcfile not installed ({exc}); skipping per-channel "
+              "MRC export. Add `mrcfile` to your conda env to enable it.")
+        return
     for ch_name, ch_data in zip(channel_names, channel_arrays):
         out_file = os.path.join(output_path,
                                 f"{basename}_{ch_name}.mrc")
