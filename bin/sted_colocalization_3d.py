@@ -47,17 +47,26 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
   {basename}_half_max_distances.csv    wide-format, one row per nucleoid:
                                        image_name, nucleoid_id, z, y, x,
                                        on_mito, mtdna_half_max_um,
-                                       mito_half_max_um, septin_half_max_um
-                                       (distance where each channel's
-                                       radial profile first crosses half
-                                       of its peak, linearly interpolated
-                                       between the two bracketing bins)
+                                       mito_half_max_um, septin_half_max_um,
+                                       lambda1_um2, lambda2_um2, lambda3_um2,
+                                       sphericity
+                                       (half_max: distance where each
+                                       channel's radial profile first crosses
+                                       half of its peak, linearly interpolated
+                                       between the two bracketing bins.
+                                       lambda1..3: eigenvalues of the mtDNA
+                                       intensity-weighted moment tensor (µm²,
+                                       λ1≥λ2≥λ3). sphericity = sqrt(λ3/λ1),
+                                       1=spherical intensity distribution,
+                                       →0=rod/disc)
   {basename}_radial_profiles.png       per-image 3-panel mean ± SEM plot
                                        (mtDNA / mito / septin), same render
                                        as the pooled plot but over this
                                        image's nucleoids only
   per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.{png,svg}
-                                       2x3 plot per detected mtDNA nucleoid:
+                                       2x3 plot per detected mtDNA nucleoid.
+                                       Title shows this nucleoid's sphericity
+                                       and λ1..3 (from the moment tensor).
                                          top row    = radial profile in
                                                       mtDNA / mito / septin
                                                       (single-sample lines)
@@ -110,6 +119,8 @@ import pandas as pd
 import tifffile
 from scipy import ndimage
 from skimage import measure
+from skimage.feature import peak_local_max
+from skimage.segmentation import watershed
 
 
 # -------- filename helpers (match the puncta_nn_scan convention) -----------
@@ -246,24 +257,200 @@ def area_septin_stats(septin_ch, area1, area2, mito_mask):
 
 # -------- 3D radial intensity profile around mtDNA centroids ---------------
 
-def find_nucleoid_centroids(mtdna_mask_3d, min_voxels):
-    """Connected-component centroids of the 3D mtDNA binary mask.
+def _ellipsoid_footprint(radius_um, vx_um, vy_um, vz_um):
+    """Boolean ellipsoidal structuring element whose semi-axes equal
+    `radius_um` in each physical direction. Converts the physical radius to a
+    voxel radius per axis using the (anisotropic) voxel sizes, so a single
+    physical separation maps to fewer voxels along the coarser Z axis than
+    along the finer lateral axes. Guarantees at least a 1-voxel extent per
+    axis so the footprint is never degenerate.
+    """
+    rz = max(int(round(radius_um / vz_um)), 1)
+    ry = max(int(round(radius_um / vy_um)), 1)
+    rx = max(int(round(radius_um / vx_um)), 1)
+    zz, yy, xx = np.ogrid[-rz:rz + 1, -ry:ry + 1, -rx:rx + 1]
+    ellipsoid = (zz / rz) ** 2 + (yy / ry) ** 2 + (xx / rx) ** 2 <= 1.0
+    return ellipsoid
 
-    Drops components below `min_voxels`. Returns an (N, 3) array of (z, y, x)
-    centroids in image coordinates (floats rounded to ints for indexing).
+
+def _detect_nucleoids(mtdna_mask_3d, min_voxels, *,
+                      intensity=None, split=False,
+                      min_separation_um=None, smoothing_um=None,
+                      vx_um=None, vy_um=None, vz_um=None):
+    """Label individual mtDNA nucleoids and return centroids + the label
+    volume that produced them.
+
+    Two modes:
+
+    * ``split=False`` (original behavior): one nucleoid per connected component
+      of `mtdna_mask_3d`. Components below `min_voxels` are dropped.
+
+    * ``split=True`` (spatial splitting): merged punctae — a single connected
+      component that actually contains two or more nucleoids sitting closer
+      than one blob — are broken apart. Within the mask we (1) optionally
+      Gaussian-smooth the mtDNA `intensity` (anisotropic sigma = `smoothing_um`
+      per axis), (2) detect local intensity maxima at least `min_separation_um`
+      apart (an anisotropy-aware ellipsoidal footprint, restricted per
+      component so peaks can't leak across a gap), and (3) run a seeded
+      watershed on the inverted intensity, confined to the mask, using those
+      maxima as markers. Each watershed basin ≥ `min_voxels` is one nucleoid.
+      A component with a single maximum comes back whole, so isolated punctae
+      are unaffected.
+
+    Returns ``(centroids, label_volume, labels)``:
+        centroids    : (N, 3) int array of (z, y, x) centroids
+        label_volume : (Z, Y, X) int label image (connected components when
+                       split=False, watershed basins when split=True)
+        labels       : list of length N; ``labels[i]`` is the integer id in
+                       `label_volume` for nucleoid i, in the SAME order as
+                       `centroids` (i.e. matching nucleoid_id downstream).
+    Emits a one-line split summary via click when `split=True`.
     """
     labeled = measure.label(mtdna_mask_3d, connectivity=3)
+    empty = (np.empty((0, 3), dtype=np.int64),
+             np.zeros(mtdna_mask_3d.shape, dtype=np.int32), [])
     if labeled.max() == 0:
-        return np.empty((0, 3), dtype=np.int64)
-    props = measure.regionprops(labeled)
-    coords = []
-    for p in props:
+        return empty
+
+    if not split:
+        coords, labels = [], []
+        for p in measure.regionprops(labeled):
+            if p.area >= int(min_voxels):
+                z, y, x = p.centroid
+                coords.append((int(round(z)), int(round(y)), int(round(x))))
+                labels.append(int(p.label))
+        if not coords:
+            return empty
+        return (np.asarray(coords, dtype=np.int64),
+                labeled.astype(np.int32), labels)
+
+    # ---- spatial splitting via seeded watershed --------------------------
+    if intensity is None:
+        raise ValueError("split=True requires the mtDNA `intensity` array")
+    if None in (min_separation_um, vx_um, vy_um, vz_um):
+        raise ValueError("split=True requires min_separation_um and voxel "
+                         "sizes (vx_um, vy_um, vz_um)")
+
+    n_components = int(labeled.max())
+
+    signal = np.asarray(intensity, dtype=np.float32)
+    if smoothing_um and smoothing_um > 0:
+        sigma = (smoothing_um / vz_um, smoothing_um / vy_um, smoothing_um / vx_um)
+        signal = ndimage.gaussian_filter(signal, sigma=sigma)
+
+    footprint = _ellipsoid_footprint(min_separation_um, vx_um, vy_um, vz_um)
+
+    # Local maxima of the smoothed signal, restricted to (and separated by)
+    # the labeled components so a maximum can't be shared across a gap.
+    peaks = peak_local_max(
+        signal,
+        footprint=footprint,
+        labels=labeled,
+        exclude_border=False,
+    )
+    if peaks.shape[0] == 0:
+        # Degenerate: fall back to connected-component centroids.
+        return _detect_nucleoids(mtdna_mask_3d, min_voxels, split=False)
+
+    markers = np.zeros(labeled.shape, dtype=np.int32)
+    markers[tuple(peaks.T)] = np.arange(1, peaks.shape[0] + 1)
+
+    ws = watershed(-signal, markers=markers, mask=mtdna_mask_3d)
+
+    coords, labels = [], []
+    for p in measure.regionprops(ws):
         if p.area >= int(min_voxels):
             z, y, x = p.centroid
             coords.append((int(round(z)), int(round(y)), int(round(x))))
+            labels.append(int(p.label))
+
+    n_nucleoids = len(coords)
+    n_split = max(n_nucleoids - n_components, 0)
+    click.echo(f"  spatial splitting: {n_components} connected component(s) "
+               f"-> {n_nucleoids} nucleoid(s) "
+               f"(+{n_split} from splitting merged punctae)")
+
     if not coords:
-        return np.empty((0, 3), dtype=np.int64)
-    return np.asarray(coords, dtype=np.int64)
+        return empty
+    return (np.asarray(coords, dtype=np.int64), ws.astype(np.int32), labels)
+
+
+def find_nucleoid_centroids(mtdna_mask_3d, min_voxels, **kwargs):
+    """Thin wrapper around `_detect_nucleoids` returning only the (N, 3)
+    array of integer (z, y, x) nucleoid centroids. See `_detect_nucleoids`
+    for the detection modes and keyword arguments."""
+    return _detect_nucleoids(mtdna_mask_3d, min_voxels, **kwargs)[0]
+
+
+def compute_nucleoid_shapes(label_volume, labels, intensity, basename,
+                            vx_um, vy_um, vz_um):
+    """Per-nucleoid shape descriptors from the intensity-weighted
+    second-moment (gyration) tensor — no surface area required.
+
+    For each nucleoid `i` (region `labels[i]` in `label_volume`), treat the
+    mtDNA `intensity` inside that region as a mass distribution over physical
+    voxel positions ``r = (z*vz_um, y*vy_um, x*vx_um)`` and compute the
+    intensity-weighted covariance ``C = Σ w (r-r̄)(r-r̄)ᵀ / Σ w``. Its
+    eigenvalues ``λ1 ≥ λ2 ≥ λ3`` (in µm²) are the variances along the
+    principal axes — i.e. the squared semi-axes of the equivalent ellipsoid.
+
+    Reports:
+        lambda1_um2, lambda2_um2, lambda3_um2 : the eigenvalues (µm²)
+        sphericity : sqrt(λ3 / λ1) in [0, 1]; 1 for an isotropic (spherical)
+                     intensity distribution, → 0 for a rod or disc.
+
+    NOTE this measures ellipsoidal elongation/flatness, NOT surface roughness:
+    a lumpy blob with the same second moments as a sphere reads as spherical.
+    Because it is intensity-weighted it is robust to the exact mask boundary
+    and, for split nucleoids, to the watershed cut plane.
+
+    Returns a DataFrame ordered to match `labels` with columns:
+        image_name, nucleoid_id, lambda1_um2, lambda2_um2, lambda3_um2,
+        sphericity
+    NaN eigenvalues/sphericity for degenerate regions (zero total intensity
+    or a fully collinear/planar set of voxels giving λ1 == 0).
+    """
+    cols = ['image_name', 'nucleoid_id', 'lambda1_um2', 'lambda2_um2',
+            'lambda3_um2', 'sphericity']
+    if len(labels) == 0:
+        return pd.DataFrame(columns=cols)
+
+    spacing = np.array([vz_um, vy_um, vx_um], dtype=np.float64)
+    intensity = np.asarray(intensity, dtype=np.float64)
+
+    # One pass to collect each region's voxel coordinates.
+    objects = ndimage.find_objects(label_volume)
+    rows = []
+    for i, lab in enumerate(labels):
+        row = {'image_name': basename, 'nucleoid_id': i,
+               'lambda1_um2': np.nan, 'lambda2_um2': np.nan,
+               'lambda3_um2': np.nan, 'sphericity': np.nan}
+        sl = objects[lab - 1] if lab - 1 < len(objects) else None
+        if sl is not None:
+            sub_lab = label_volume[sl]
+            sub_int = intensity[sl]
+            local = np.argwhere(sub_lab == lab)  # (M, 3) local (z, y, x)
+            w = sub_int[sub_lab == lab]
+            W = float(w.sum())
+            if local.shape[0] >= 1 and W > 0:
+                # Physical coordinates (offset by the crop origin is irrelevant
+                # to a covariance, so we keep local coords).
+                r = local.astype(np.float64) * spacing
+                mean = (w[:, None] * r).sum(axis=0) / W
+                d = r - mean
+                cov = (w[:, None, None] * (d[:, :, None] * d[:, None, :])
+                       ).sum(axis=0) / W
+                eig = np.linalg.eigvalsh(cov)          # ascending
+                l3, l2, l1 = float(eig[0]), float(eig[1]), float(eig[2])
+                l3 = max(l3, 0.0)                       # clamp tiny negatives
+                row['lambda1_um2'] = l1
+                row['lambda2_um2'] = l2
+                row['lambda3_um2'] = l3
+                if l1 > 0:
+                    row['sphericity'] = float(np.sqrt(l3 / l1))
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=cols)
 
 
 def _normalize_3d(ch, mask=None):
@@ -684,7 +871,7 @@ def _make_rgb_composite(yellow_ch=None, cyan_ch=None, magenta_ch=None):
 def render_single_nucleoid_radial(
     out_path, single_df, radius, label,
     mtdna_vol, mito_vol, septin_vol, z, y, x,
-    scan_mask=None,
+    scan_mask=None, sphericity=None, lambdas=None,
 ):
     """2x3 plot for ONE nucleoid:
        Top row    = mtDNA / mito / septin radial profile (single sample).
@@ -707,6 +894,12 @@ def render_single_nucleoid_radial(
     stability across callers, even though the new bottom row only renders
     mtDNA and septin signal directly (the mito information is conveyed by
     the green mask contour).
+
+    `sphericity` (optional float) and `lambdas` (optional (λ1, λ2, λ3) µm²
+    tuple) come from the intensity-weighted moment tensor for this nucleoid.
+    When given, they are printed on a second title line so the reader can
+    interpret the shape (sphericity 1 = round, → 0 = rod/disc). NaN values
+    are skipped.
     """
     fig, axes = plt.subplots(2, 3, figsize=(15, 9))
 
@@ -800,7 +993,20 @@ def render_single_nucleoid_radial(
     _draw_panel(axes[1, 1], 'mtDNA (mito outline)',          rgb_mtdna_only)
     _draw_panel(axes[1, 2], 'septin (mito outline)',         rgb_septin_only)
 
-    fig.suptitle(f'Radial profile + image context - {label}')
+    # Shape descriptors (from the intensity-weighted moment tensor) shown on
+    # a second title line so the reader can interpret the figure: sphericity
+    # near 1 = round/isotropic mtDNA distribution, lower = elongated (rod) or
+    # flattened (disc). lambda1..3 are the principal-axis variances in µm².
+    title = f'Radial profile + image context - {label}'
+    if sphericity is not None and not np.isnan(sphericity):
+        shape_line = f'sphericity = {sphericity:.3f}  (1=spherical, →0=rod/disc)'
+        if lambdas is not None and not any(np.isnan(v) for v in lambdas):
+            l1, l2, l3 = lambdas
+            shape_line += (f'    λ1,λ2,λ3 = {l1:.4f}, {l2:.4f}, {l3:.4f} µm²'
+                           f'    axis ratio λ3/λ1 = {l3 / l1:.2f}'
+                           if l1 > 0 else '')
+        title = f'{title}\n{shape_line}'
+    fig.suptitle(title)
     fig.tight_layout()
     # Save both PNG (raster, fast to preview) and SVG (vector, editable in
     # Illustrator/Inkscape and infinitely scalable). The SVG path is derived
@@ -881,6 +1087,9 @@ def process_one_image_3d(
     septin_threshold_percentile,
     punct_scan_radius,
     min_nucleoid_voxels,
+    split_nucleoids,
+    nucleoid_min_separation_nm,
+    nucleoid_smoothing_nm,
     radial_scan_mito_threshold_percentile,
     radial_scan_mito_dilation,
     voxel_size_x_nm,
@@ -892,9 +1101,9 @@ def process_one_image_3d(
     save_per_nucleoid_png_flag,
 ):
     """Run the full 3D pipeline for one image and return:
-       (area_summary_row, radial_df)
+       (area_summary_row, radial_df, half_max_df)
 
-    Either may be None if the image was skipped (bad shape, missing channels).
+    All three are None if the image was skipped (bad shape, missing channels).
     """
     raw_name = os.path.basename(image_path)
     basename = _strip_tiff_ext(raw_name)
@@ -907,7 +1116,7 @@ def process_one_image_3d(
         channel_data, (z_slices, num_channels, height, width) = read_3d_tiff(image_path)
     except ValueError as exc:
         click.echo(f"  ERROR: {exc}")
-        return None, None
+        return None, None, None
 
     # Map the requested channel indices to the actual arrays.
     if max(mtdna_channel, mito_channel, protein_channel) >= num_channels:
@@ -916,7 +1125,7 @@ def process_one_image_3d(
             f"mtdna={mtdna_channel}, mito={mito_channel}, "
             f"protein={protein_channel}; skipping."
         )
-        return None, None
+        return None, None, None
 
     mtdna_raw = channel_data[mtdna_channel]
     mito_raw = channel_data[mito_channel]
@@ -1005,9 +1214,22 @@ def process_one_image_3d(
         click.echo(f"  wrote channel histogram PNG")
 
     # ---- NEW: per-nucleoid 3D radial intensity profiles -----------------
-    centroids = find_nucleoid_centroids(mtdna_mask_3d, min_nucleoid_voxels)
+    # Voxel sizes in microns (needed for anisotropy-aware nucleoid splitting
+    # and, further down, the radial distance axis).
+    vx_um = float(voxel_size_x_nm) / 1000.0
+    vy_um = float(voxel_size_y_nm) / 1000.0
+    vz_um = float(voxel_size_z_nm) / 1000.0
+
+    centroids, nucleoid_labels, nucleoid_label_ids = _detect_nucleoids(
+        mtdna_mask_3d, min_nucleoid_voxels,
+        intensity=mtdna_raw, split=split_nucleoids,
+        min_separation_um=float(nucleoid_min_separation_nm) / 1000.0,
+        smoothing_um=float(nucleoid_smoothing_nm) / 1000.0,
+        vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
+    )
     click.echo(f"  found {centroids.shape[0]} mtDNA nucleoid centroids "
-               f"(min_voxels={min_nucleoid_voxels})")
+               f"(min_voxels={min_nucleoid_voxels}, "
+               f"split={'on' if split_nucleoids else 'off'})")
 
     half_max_df = None  # populated in the else-branch below when we have data
     if centroids.shape[0] == 0:
@@ -1040,13 +1262,8 @@ def process_one_image_3d(
             f"({100.0 * radial_scan_mask.sum() / radial_scan_mask.size:.2f}% of volume)"
         )
 
-        # Voxel sizes: stored in nm in the config, convert to microns here
-        # so the rest of the pipeline (distance axis, plot labels, CSV
-        # column) speaks in physical microns.
-        vx_um = float(voxel_size_x_nm) / 1000.0
-        vy_um = float(voxel_size_y_nm) / 1000.0
-        vz_um = float(voxel_size_z_nm) / 1000.0
-
+        # Voxel sizes (vx_um/vy_um/vz_um) were computed above alongside the
+        # nucleoid detection; reused here for the physical distance axis.
         on_mito = mito_mask_3d[centroids[:, 0], centroids[:, 1], centroids[:, 2]]
         radial_df = compute_radial_profiles_3d(
             centroids, on_mito, mtdna_n, mito_n, septin_n,
@@ -1067,6 +1284,18 @@ def process_one_image_3d(
         # to compare "how localized is mtDNA vs septin around each nucleoid"
         # without pivoting the long-format table yourself.
         half_max_df = compute_half_max_distances(radial_df)
+
+        # Per-nucleoid shape descriptors (intensity-weighted moment tensor):
+        # sphericity + principal-axis variances lambda1..3 (µm²). Merged in
+        # on nucleoid_id so every half-max row carries its nucleoid's shape.
+        shapes_df = compute_nucleoid_shapes(
+            nucleoid_labels, nucleoid_label_ids, mtdna_raw, basename,
+            vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
+        )
+        half_max_df = half_max_df.merge(
+            shapes_df, on=['image_name', 'nucleoid_id'], how='left',
+        )
+
         half_max_csv = os.path.join(image_out_dir,
                                      f"{basename}_half_max_distances.csv")
         half_max_df.to_csv(half_max_csv, index=False)
@@ -1107,6 +1336,17 @@ def process_one_image_3d(
                 label = (f"id={int(nuc_id):d} "
                          f"z={z} y={y} x={x} "
                          f"{'on-mito' if on else 'off-mito'}")
+                # Look up this nucleoid's shape descriptors (same nucleoid_id)
+                # so they can be shown on the figure title.
+                srow = shapes_df[shapes_df['nucleoid_id'] == nuc_id]
+                if srow.empty:
+                    sphericity = None
+                    lambdas = None
+                else:
+                    sphericity = float(srow['sphericity'].iloc[0])
+                    lambdas = (float(srow['lambda1_um2'].iloc[0]),
+                               float(srow['lambda2_um2'].iloc[0]),
+                               float(srow['lambda3_um2'].iloc[0]))
                 # Prefix the filename with image basename + run_name so the
                 # file is self-identifying when moved or pooled outside its
                 # per_nucleoid/ directory.
@@ -1127,6 +1367,7 @@ def process_one_image_3d(
                         out_path, sub, int(punct_scan_radius), label,
                         mtdna_raw, mito_raw, septin_raw, z, y, x,
                         scan_mask=radial_scan_mask,
+                        sphericity=sphericity, lambdas=lambdas,
                     )
                     n_ok += 1
                 except Exception as exc:
@@ -1193,18 +1434,23 @@ def _save_half_max_pooled(per_image_half_max_dfs, output_dir):
     pooled.to_csv(out, index=False)
     click.echo(f"Wrote pooled half-max CSV -> {out}")
 
-    def _summary(col):
+    def _summary(col, unit='µm'):
+        if col not in pooled.columns:
+            return f'  {col}: column not present'
         vals = pooled[col].dropna().values
         if vals.size == 0:
             return f'  {col}: no valid samples'
+        u = f' {unit}' if unit else ''
         return (f'  {col}: n={vals.size}, '
-                f'mean={vals.mean():.3f} µm, '
-                f'median={float(np.median(vals)):.3f} µm, '
-                f'std={vals.std(ddof=1):.3f} µm')
+                f'mean={vals.mean():.3f}{u}, '
+                f'median={float(np.median(vals)):.3f}{u}, '
+                f'std={vals.std(ddof=1):.3f}{u}')
     click.echo('  half-max distance summary (µm):')
     click.echo(_summary('mtdna_half_max_um'))
     click.echo(_summary('mito_half_max_um'))
     click.echo(_summary('septin_half_max_um'))
+    click.echo('  nucleoid sphericity summary (dimensionless):')
+    click.echo(_summary('sphericity', unit=''))
 
 
 def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
@@ -1261,8 +1507,26 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
               help='Radius (voxels) for the 3D radial intensity profile '
                    'around each mtDNA nucleoid centroid.')
 @click.option('--min-nucleoid-voxels', default=5, type=int, show_default=True,
-              help='Drop mtDNA connected components smaller than this many '
+              help='Drop mtDNA components/basins smaller than this many '
                    'voxels before computing centroids.')
+@click.option('--split-nucleoids/--no-split-nucleoids', default=True,
+              show_default=True,
+              help='Spatially split merged mtDNA punctae: within each '
+                   'connected component, detect local intensity maxima and '
+                   'seed a watershed so two nucleoids fused into one blob are '
+                   'counted separately. Disable to revert to one centroid per '
+                   'connected component.')
+@click.option('--nucleoid-min-separation-nm', default=150.0, type=float,
+              show_default=True,
+              help='Minimum physical separation (nm) between two nucleoid '
+                   'intensity maxima when --split-nucleoids is on. Set near '
+                   'your effective resolution / expected nucleoid spacing; '
+                   'larger values merge more, smaller values split more.')
+@click.option('--nucleoid-smoothing-nm', default=50.0, type=float,
+              show_default=True,
+              help='Gaussian smoothing sigma (nm, physical) applied to the '
+                   'mtDNA channel before maxima detection when splitting, to '
+                   'suppress spurious peaks from noise. Set to 0 to disable.')
 @click.option('--radial-scan-mito-threshold-percentile', default=99, type=float,
               show_default=True,
               help='Percentile of nonzero mito voxels used to build the '
@@ -1301,6 +1565,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
          mtdna_threshold_percentile, mtdna_dilation,
          septin_threshold_percentile,
          punct_scan_radius, min_nucleoid_voxels,
+         split_nucleoids, nucleoid_min_separation_nm, nucleoid_smoothing_nm,
          radial_scan_mito_threshold_percentile, radial_scan_mito_dilation,
          voxel_size_x_nm, voxel_size_y_nm, voxel_size_z_nm,
          save_channel_mrcs, save_analysis_png, save_histogram_png,
@@ -1333,6 +1598,13 @@ def main(input_dir, input_pattern, output_dir, run_name,
     click.echo(f"  septin thr={septin_threshold_percentile}%")
     click.echo(f"  radial scan radius={punct_scan_radius} voxels, "
                f"min_nucleoid_voxels={min_nucleoid_voxels}")
+    if split_nucleoids:
+        click.echo(f"  nucleoid splitting: ON "
+                   f"(min_separation={nucleoid_min_separation_nm:.0f} nm, "
+                   f"smoothing={nucleoid_smoothing_nm:.0f} nm)")
+    else:
+        click.echo(f"  nucleoid splitting: OFF "
+                   f"(one centroid per connected component)")
     click.echo(f"  radial-scan mito mask: "
                f"thr@{radial_scan_mito_threshold_percentile}%, "
                f"dilation={radial_scan_mito_dilation}")
@@ -1359,6 +1631,9 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 septin_threshold_percentile=septin_threshold_percentile,
                 punct_scan_radius=punct_scan_radius,
                 min_nucleoid_voxels=min_nucleoid_voxels,
+                split_nucleoids=split_nucleoids,
+                nucleoid_min_separation_nm=nucleoid_min_separation_nm,
+                nucleoid_smoothing_nm=nucleoid_smoothing_nm,
                 radial_scan_mito_threshold_percentile=radial_scan_mito_threshold_percentile,
                 radial_scan_mito_dilation=radial_scan_mito_dilation,
                 voxel_size_x_nm=voxel_size_x_nm,

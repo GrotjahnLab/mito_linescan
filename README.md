@@ -242,8 +242,18 @@ percentile thresholds, computes the original Area1 (within K voxels of
 mtDNA, inside mito) vs Area2 (mito, away from mtDNA) septin intensity
 analysis, and on top of that produces a **per-nucleoid 3D radial intensity
 profile** in all three channels using spherical shells out to a configurable
-voxel radius. mtDNA "nucleoids" are connected components of the 3D mtDNA
-binary mask, filtered by a minimum voxel count.
+voxel radius. mtDNA "nucleoids" are derived from the connected components of
+the 3D mtDNA binary mask, filtered by a minimum voxel count. By default
+(`split_nucleoids: true`) each component is further **spatially split** so
+that two nucleoids fused into a single punctum are counted separately: within
+each component the pipeline detects local mtDNA-intensity maxima at least
+`nucleoid_min_separation_nm` apart (using an anisotropy-aware footprint built
+from the `voxel_size_*_nm` values) and seeds a watershed on the mtDNA
+intensity, so each basin becomes one nucleoid. A component with a single
+maximum comes back whole, so isolated punctae are unaffected. Set
+`split_nucleoids: false` to revert to one centroid per connected component.
+Note this splitting is spatial: two nucleoids closer than the effective
+resolution cannot be separated this way.
 
 Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_{septin|mito|mtDNA}.mrc` — single-channel float32 MRC exports
@@ -256,15 +266,29 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
   config keys).
 - `{basename}_half_max_distances.csv` — wide-format, one row per nucleoid:
   `image_name, nucleoid_id, z, y, x, on_mito, mtdna_half_max_um,
-  mito_half_max_um, septin_half_max_um`. For each channel, the distance in
-  microns at which that nucleoid's radial profile first drops below half
-  its peak (linearly interpolated between the two bracketing bins). NaN
-  when the profile never falls below half-max within the scan radius.
+  mito_half_max_um, septin_half_max_um, lambda1_um2, lambda2_um2,
+  lambda3_um2, sphericity`. The `*_half_max_um` columns give, for each
+  channel, the distance in microns at which that nucleoid's radial profile
+  first drops below half its peak (linearly interpolated between the two
+  bracketing bins; NaN when the profile never falls below half-max within
+  the scan radius). The shape columns come from the **mtDNA
+  intensity-weighted second-moment (gyration) tensor** of the nucleoid — no
+  surface area is computed. `lambda1_um2 ≥ lambda2_um2 ≥ lambda3_um2` are its
+  eigenvalues (variances along the principal axes, in µm², i.e. the squared
+  semi-axes of the equivalent ellipsoid) and `sphericity = sqrt(λ3/λ1)` is a
+  scalar in `[0, 1]` — `1` for an isotropic (spherical) intensity
+  distribution, approaching `0` for a rod or disc. Because it is
+  intensity-weighted this is robust to the exact mask boundary and, for split
+  nucleoids, to the watershed cut plane; note it captures ellipsoidal
+  elongation/flatness, **not** surface roughness (a lumpy blob with the same
+  second moments as a sphere still reads as spherical).
 - `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
   (mtDNA / mito / septin) computed from this image's nucleoids only; same
   visual style as the pooled plot below for easy comparison
 - `per_nucleoid/{basename}_{run_name}_nucleoid_{id:03d}_z{z}_y{y}_x{x}.{png,svg}` — 2×3 plot per
-  detected nucleoid. Top row: radial profile in mtDNA (gold), mito (green),
+  detected nucleoid. The title's second line reports this nucleoid's
+  `sphericity` and `λ1, λ2, λ3` (µm²) from the moment tensor, so the shape
+  can be read straight off the figure. Top row: radial profile in mtDNA (gold), mito (green),
   septin (darkcyan), distance axis in **microns**. Bottom row:
   black-background true-color crops at the centroid's Z slice with mtDNA in
   **yellow** (R+G) and septin in **cyan** (G+B) so signal overlap appears
@@ -303,7 +327,13 @@ sted_colocalization_3d:
   mtdna_dilation: 3                    # Area1 = dilated mtDNA ∩ mito
   septin_threshold_percentile: 95      # For stats reporting
   punct_scan_radius: 20                # Radial profile radius (voxels)
-  min_nucleoid_voxels: 5               # Drop tiny mtDNA components
+  min_nucleoid_voxels: 5               # Drop tiny mtDNA components/basins
+  split_nucleoids: true                # Split merged punctae (watershed);
+                                       # false = one centroid per component
+  nucleoid_min_separation_nm: 150      # Min separation between two maxima;
+                                       # larger merges more, smaller splits more
+  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) before maxima
+                                       # detection; 0 disables
   # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
   # radial profile (so intensity vs distance reflects mito interior only).
   radial_scan_mito_threshold_percentile: 99
