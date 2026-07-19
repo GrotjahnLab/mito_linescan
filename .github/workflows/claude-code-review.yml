@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write   # needed so the review can post a PR comment
+      pull-requests: write   # track_progress posts/updates the review comment
       issues: read
       id-token: write
 
@@ -20,34 +20,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          # Full history so the adversarial-reviewer skill can diff against the base branch
+          # Full history so the skills can diff against the base branch
           fetch-depth: 0
 
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
-        env:
-          # Let the Bash tool authenticate `gh` for posting the review comment
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_TOKEN: ${{ github.token }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The action posts Claude's final response by creating/updating a single
+          # tracking comment — no raw `gh` write is needed (and `gh` write
+          # subcommands are denied by the action's permission layer anyway).
+          track_progress: true
           # Enable the project setting source so the repo-vendored skills in
-          # .claude/skills/ are discovered, and allow the Skill + Bash tools so
-          # the skills (and their analyzer scripts / gh) can run.
+          # .claude/skills/ are discovered, and allow Skill + Bash so the skills
+          # (and code-reviewer's analyzer scripts) can run.
           claude_args: |
             --setting-sources "project,user"
             --allowedTools "Skill,Bash,Read,Grep,Glob"
             --max-turns 40
           prompt: |
-            You are performing an automated code review of pull request
-            #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+            Perform an automated code review of this pull request.
 
-            The diff to review is the changes this PR introduces. Obtain it with:
-              gh pr diff ${{ github.event.pull_request.number }}
-            Read the full content of any changed file from the checked-out working
-            tree when you need surrounding context — do not review only the changed
-            lines.
+            The changes to review are this PR's diff against its base branch.
+            Obtain them locally (the full history is checked out) with:
+              git diff origin/${{ github.base_ref }}...HEAD
+            Read the full content of any changed file for context — do not review
+            only the changed lines.
 
             Review the changes in TWO passes, using BOTH repository-vendored skills:
 
@@ -57,15 +56,11 @@ jobs:
                complexity, risk, SOLID violations, and code smells.
             2. Invoke the `adversarial-reviewer` skill (.claude/skills/adversarial-reviewer)
                and run all three hostile personas (Saboteur, New Hire, Security
-               Auditor) against the same changes, ending with its BLOCK / CONCERNS /
-               CLEAN verdict.
+               Auditor), ending with its BLOCK / CONCERNS / CLEAN verdict.
 
-            Then post ONE consolidated review as a single PR comment:
-              gh pr comment ${{ github.event.pull_request.number }} --body-file <path>
-
-            Structure the comment with two clearly separated sections:
+            Present ONE consolidated review as your final response, with two
+            clearly separated sections and the verdict at the end:
               ## 🔍 Code Review (code-reviewer)
               ## 🗡️ Adversarial Review (adversarial-reviewer)
-            and finish with the adversarial verdict.
 
             This is a review only — do not modify, stage, or commit any files.
