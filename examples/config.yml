@@ -7,8 +7,6 @@ draw_mask:
   manual_mask_directory: 'SEPT9_REPRESENTATIVE/manual_masks'  # Output directory for manually drawn masks (optional, defaults to input directory)
   mito_channel: 0  # Channel index for mitochondria (0-based)
   target_channel: 1  # Channel index for target/scan signal (0-based)
-  scan_width: 7  # Width of scan lines in pixels
-  sampling_radius: 3  # Radius for weighted average sampling in pixels
 
 # Mask refine: Refine mask edges using intensity information
 refine_mask:

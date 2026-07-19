@@ -119,10 +119,8 @@ def draw_mitochondria(mito_image, scan_image):
 @click.option('--manual-mask-directory', default='', help='Output directory for manually drawn masks (optional, default is same as input)', required=False)
 @click.option('--mito-channel', default=0, help='Channel index for mitochondria (0-based)', required=False)
 @click.option('--target-channel', default=1, help='Channel index for mask (0-based)', required=False)
-@click.option('--scan-width', default=7, help='Width of scan lines in pixels', required=False)
-@click.option('--sampling-radius', default=3, help='Radius for weighted average sampling in pixels', required=False)
 @click.option('--outliers-csv', default='', help='Path to outliers CSV file from plot_peak_distance_analysis (optional, only process outlier images)', required=False)
-def main(input_directory, manual_mask_directory, target_channel, mito_channel, scan_width=5, sampling_radius=3, outliers_csv=''):
+def main(input_directory, manual_mask_directory, target_channel, mito_channel, outliers_csv=''):
     input_image_dir = input_directory
     
     #if manual_mask_directory is not provided, save the output in the same input directory
@@ -209,8 +207,6 @@ def main(input_directory, manual_mask_directory, target_channel, mito_channel, s
                         print("Please enter y / n / a (overwrite all) / s (skip all).")
                 if response in ('n', 's'):
                     continue
-        mito_channel = 1
-        target_channel = 0
 
         image = tf.imread(os.path.join(input_image_dir, input_image))
         print(f"Input file: {input_image}, shape: {image.shape}, dtype: {image.dtype}")
