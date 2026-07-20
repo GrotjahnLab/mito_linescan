@@ -118,7 +118,7 @@ import pandas as pd
 import tifffile
 from scipy import ndimage
 from skimage import measure
-from skimage.feature import peak_local_max
+from skimage.morphology import white_tophat, h_maxima
 from skimage.segmentation import watershed
 
 
@@ -320,90 +320,146 @@ def _ellipsoid_footprint(radius_um, vx_um, vy_um, vz_um):
     return ellipsoid
 
 
-def _detect_nucleoids(foreground_mask, min_voxels, *,
-                      intensity, min_separation_um, peak_fraction,
-                      smoothing_um=None,
-                      vx_um=None, vy_um=None, vz_um=None):
-    """Detect mtDNA nucleoids by maxima + seeded watershed + per-peak regions.
+def flatten_mtdna(mtdna_raw, tophat_radius_um, smoothing_um,
+                  vx_um, vy_um, vz_um):
+    """Background-flatten the mtDNA channel for detection.
 
-    Everything happens INSIDE `foreground_mask` — the whole-image percentile
-    mask that only removes background; it does not itself define nucleoids.
-
-    1. Optionally Gaussian-smooth the raw mtDNA `intensity` (anisotropic sigma
-       = `smoothing_um` per axis) to suppress noise peaks.
-    2. Detect local intensity maxima of the (smoothed) signal within the
-       foreground, separated by an anisotropy-aware ellipsoidal footprint of
-       physical radius `min_separation_um` (`peak_local_max`, exclude_border
-       False, restricted per connected component so a peak can't be shared
-       across a gap). Each maximum is one nucleoid seed.
-    3. Seeded watershed on the inverted signal, masked to the foreground, using
-       the maxima as markers — so two nucleoids that touch are partitioned by a
-       watershed boundary. Each basin is a candidate nucleoid.
-    4. Within each basin keep only voxels whose signal is >= `peak_fraction` of
-       THAT basin's own peak (maximum) — a relative, per-nucleoid cutoff
-       (default 0.30). This shapes each nucleoid; the watershed boundary
-       already clips a region where it meets a neighbour's basin. Basins whose
-       surviving region has fewer than `min_voxels` voxels are dropped.
-
-    Returns ``(centroids, label_volume, labels)``:
-        centroids    : (N, 3) int array of (z, y, x) centroids, recomputed from
-                       the final per-peak regions.
-        label_volume : (Z, Y, X) int32 label image of the per-peak regions,
-                       each labelled 1..N by its seed.
-        labels       : list of length N; ``labels[i]`` is the id in
-                       `label_volume` for nucleoid i, SAME order as `centroids`
-                       (matches nucleoid_id downstream).
-    Emits a one-line detection summary via click. Returns empty gracefully when
-    the foreground is empty or no maxima are found.
+    Applies a white top-hat (`skimage.morphology.white_tophat`) with an
+    anisotropic ellipsoidal structuring element of physical radius
+    `tophat_radius_um` (a bit larger than a nucleoid), which subtracts slowly
+    varying background/illumination while keeping punctum-scale features. Then
+    optionally Gaussian-smooths (anisotropic sigma = `smoothing_um` per axis)
+    to suppress single-voxel noise. Returns a float32 flattened image the SAME
+    shape as `mtdna_raw`. The raw channel is left untouched for the radial
+    profiles / per-nucleoid display.
     """
-    empty = (np.empty((0, 3), dtype=np.int64),
-             np.zeros(foreground_mask.shape, dtype=np.int32), [])
-    if intensity is None:
-        raise ValueError("_detect_nucleoids requires the mtDNA `intensity` array")
-    if None in (min_separation_um, vx_um, vy_um, vz_um):
-        raise ValueError("_detect_nucleoids requires min_separation_um and "
-                         "voxel sizes (vx_um, vy_um, vz_um)")
-
-    foreground = np.asarray(foreground_mask, dtype=bool)
-    if not foreground.any():
-        click.echo("  nucleoid detection: empty foreground -> 0 nucleoids")
-        return empty
-
-    # 1. Smoothed signal used for maxima, watershed, and the per-peak cutoff.
-    signal = np.asarray(intensity, dtype=np.float32)
+    raw = np.asarray(mtdna_raw, dtype=np.float32)
+    if tophat_radius_um and tophat_radius_um > 0:
+        footprint = _ellipsoid_footprint(tophat_radius_um, vx_um, vy_um, vz_um)
+        flat = white_tophat(raw, footprint=footprint)
+    else:
+        flat = raw.copy()
     if smoothing_um and smoothing_um > 0:
         sigma = (smoothing_um / vz_um, smoothing_um / vy_um, smoothing_um / vx_um)
-        signal = ndimage.gaussian_filter(signal, sigma=sigma)
+        flat = ndimage.gaussian_filter(flat, sigma=sigma)
+    return flat.astype(np.float32)
 
-    # 2. Local maxima within the foreground (connected components keep a peak
-    #    from being shared across a gap).
-    labeled_fg = measure.label(foreground, connectivity=3)
-    footprint = _ellipsoid_footprint(min_separation_um, vx_um, vy_um, vz_um)
-    peaks = peak_local_max(
-        signal,
-        footprint=footprint,
-        labels=labeled_fg,
-        exclude_border=False,
-    )
-    n_peaks = int(peaks.shape[0])
-    if n_peaks == 0:
-        click.echo("  nucleoid detection: no maxima found in foreground "
+
+def _estimate_noise(signal):
+    """Robust noise scale of a (background-flattened) image: 1.4826 * MAD of
+    the below-median non-zero voxels, so bright puncta don't inflate it. Uses
+    non-zero voxels because a white top-hat pins background to exactly 0 (a
+    hard-zero spike that would otherwise drive the MAD to 0). Returns 0.0 for a
+    flat/zero image (caller guards h > 0)."""
+    nz = signal[signal > 0]
+    if nz.size == 0:
+        return 0.0
+    med = float(np.median(nz))
+    low = nz[nz <= med]
+    base = low if low.size else nz
+    mad = float(np.median(np.abs(base - np.median(base))))
+    noise = 1.4826 * mad
+    if not np.isfinite(noise) or noise <= 0:
+        noise = float(np.std(nz))
+    return noise if np.isfinite(noise) and noise > 0 else 0.0
+
+
+def _detect_nucleoids(signal, floor_mask, min_voxels, *,
+                      prominence_sigma, peak_fraction, min_separation_um,
+                      vx_um, vy_um, vz_um):
+    """Detect mtDNA nucleoids by prominence (h-maxima) + watershed + per-peak
+    regions on a background-flattened image.
+
+    `signal` is the flattened detection image (see `flatten_mtdna`); `floor_mask`
+    is a PERMISSIVE foreground floor that only excludes genuine black background
+    and bounds the watershed extent — it does NOT decide which puncta exist.
+
+    1. Estimate a robust noise level from `signal` and set the prominence
+       height h = `prominence_sigma` * noise (guarded > 0). Detect seeds with
+       `h_maxima` on the FULL flattened image (not gated by `floor_mask`), so a
+       peak is kept only if it rises >= h above its local surroundings — dim
+       puncta on dim background and bright puncta on bright background are
+       treated the same. One seed per h-maxima region (its peak voxel).
+    2. Consolidate seeds closer than `min_separation_um` (physical), keeping the
+       brighter one.
+    3. Seeded watershed on the inverted signal, bounded by `floor_mask` (plus
+       the seed voxels themselves so a seed is never dropped by the floor), so
+       touching nucleoids are separated by watershed lines.
+    4. Within each basin keep only voxels whose signal is >= `peak_fraction` of
+       THAT basin's own peak. Drop basins whose final region has fewer than
+       `min_voxels` voxels. Centroids recomputed from the final regions.
+
+    Returns ``(centroids, label_volume, labels)`` (label_volume = the per-peak
+    regions, labelled 1..N by seed order). Emits a one-line detection summary.
+    Returns empty gracefully for a flat/zero image or when no seeds survive.
+    """
+    empty = (np.empty((0, 3), dtype=np.int64),
+             np.zeros(signal.shape, dtype=np.int32), [])
+    signal = np.asarray(signal, dtype=np.float32)
+    floor = np.asarray(floor_mask, dtype=bool)
+    frac = float(peak_fraction)
+
+    smax = float(signal.max()) if signal.size else 0.0
+    if smax <= 0:
+        click.echo("  nucleoid detection: flat/zero flattened image "
                    "-> 0 nucleoids")
         return empty
 
-    # 3. Seeded watershed, confined to the foreground.
-    markers = np.zeros(foreground.shape, dtype=np.int32)
-    markers[tuple(peaks.T)] = np.arange(1, n_peaks + 1)
-    basins = watershed(-signal, markers=markers, mask=foreground)
+    # 1. Prominence-based seeds on the full flattened image.
+    noise = _estimate_noise(signal)
+    h = prominence_sigma * noise
+    if not np.isfinite(h) or h <= 0:
+        # Flat noise estimate: fall back to a tiny fraction of the dynamic
+        # range so h_maxima can't treat the whole image as one maximum.
+        h = smax * 1e-3
+    hmax = h_maxima(signal, h)
+    seed_labeled = measure.label(hmax, connectivity=3)
+    n_regions = int(seed_labeled.max())
+    if n_regions == 0:
+        click.echo(f"  nucleoid detection: noise={noise:.3g}, h={h:.3g}, "
+                   f"0 prominence seeds -> 0 nucleoids")
+        return empty
 
-    # 4. Per-peak relative region: within each basin keep voxels whose signal
-    #    is >= peak_fraction of that basin's own maximum. Drop tiny regions.
-    label_volume = np.zeros(foreground.shape, dtype=np.int32)
+    # One seed (peak voxel) per h-maxima region, via maximum_position.
+    seeds = []  # (intensity, z, y, x)
+    positions = ndimage.maximum_position(
+        signal, labels=seed_labeled, index=np.arange(1, n_regions + 1))
+    if n_regions == 1:
+        positions = [positions]
+    for pos in positions:
+        z, y, x = int(pos[0]), int(pos[1]), int(pos[2])
+        seeds.append((float(signal[z, y, x]), z, y, x))
+    n_seeds_raw = len(seeds)
+
+    # 2. Consolidate seeds closer than min_separation_um (keep the brighter).
+    seeds.sort(key=lambda s: s[0], reverse=True)
+    kept = []
+    sep2 = float(min_separation_um) ** 2
+    for val, z, y, x in seeds:
+        ok = True
+        for _, kz, ky, kx in kept:
+            d2 = (((z - kz) * vz_um) ** 2 + ((y - ky) * vy_um) ** 2
+                  + ((x - kx) * vx_um) ** 2)
+            if d2 < sep2:
+                ok = False
+                break
+        if ok:
+            kept.append((val, z, y, x))
+    n_seeds = len(kept)
+
+    # 3. Seeded watershed, bounded by the permissive floor (+ the seed voxels).
+    markers = np.zeros(signal.shape, dtype=np.int32)
+    for i, (_, z, y, x) in enumerate(kept, start=1):
+        markers[z, y, x] = i
+    ws_mask = floor | (markers > 0)
+    basins = watershed(-signal, markers=markers, mask=ws_mask)
+
+    # 4. Per-peak relative region: keep basin voxels >= frac * basin peak.
+    label_volume = np.zeros(signal.shape, dtype=np.int32)
     coords, labels = [], []
-    frac = float(peak_fraction)
     next_label = 0
     objects = ndimage.find_objects(basins)
-    for seed in range(1, n_peaks + 1):
+    for seed in range(1, n_seeds + 1):
         sl = objects[seed - 1] if seed - 1 < len(objects) else None
         if sl is None:
             continue
@@ -416,9 +472,7 @@ def _detect_nucleoids(foreground_mask, min_voxels, *,
         if int(region_sub.sum()) < int(min_voxels):
             continue
         next_label += 1
-        # Write the region's label into the full-volume image (view via slice).
-        label_volume[sl][region_sub] = next_label
-        # Centroid recomputed from the final region (geometric, global coords).
+        label_volume[sl][region_sub] = next_label  # view via slice -> writes through
         local = np.argwhere(region_sub)
         offset = np.array([s.start for s in sl], dtype=np.float64)
         gc = local.mean(axis=0) + offset
@@ -426,18 +480,21 @@ def _detect_nucleoids(foreground_mask, min_voxels, *,
         labels.append(next_label)
 
     n_final = len(coords)
-    click.echo(f"  nucleoid detection: {n_peaks} maxima -> {n_final} nucleoid(s) "
+    click.echo(f"  nucleoid detection: noise={noise:.3g}, h={h:.3g}, "
+               f"{n_seeds_raw} prominence seeds -> {n_seeds} after "
+               f"min-separation -> {n_final} nucleoid(s) "
                f"(peak_fraction={frac:.2f}, min_voxels={int(min_voxels)})")
     if not coords:
         return empty
     return (np.asarray(coords, dtype=np.int64), label_volume, labels)
 
 
-def find_nucleoid_centroids(foreground_mask, min_voxels, **kwargs):
+def find_nucleoid_centroids(signal, floor_mask, min_voxels, **kwargs):
     """Thin wrapper around `_detect_nucleoids` returning only the (N, 3)
-    array of integer (z, y, x) nucleoid centroids. See `_detect_nucleoids`
-    for the detection pipeline and keyword arguments."""
-    return _detect_nucleoids(foreground_mask, min_voxels, **kwargs)[0]
+    array of integer (z, y, x) nucleoid centroids. `signal` is the flattened
+    detection image (see `flatten_mtdna`). See `_detect_nucleoids` for the
+    pipeline and keyword arguments."""
+    return _detect_nucleoids(signal, floor_mask, min_voxels, **kwargs)[0]
 
 
 def compute_nucleoid_shapes(label_volume, labels, intensity, basename,
@@ -734,14 +791,17 @@ def compute_half_max_distances(radial_df):
 def render_analysis_png(
     out_path, mtdna_ch, mito_ch, septin_ch,
     mtdna_mask, mito_mask, area1, area2, central_z,
-    centroids=None, nucleoid_labels=None,
+    centroids=None, nucleoid_labels=None, mtdna_flat=None,
 ):
-    """2x3 central-slice panel. The two mtDNA panels additionally overlay the
-    detected nucleoid seeds (yellow stars, for seeds on this slice) and the
-    final per-peak nucleoid boundaries (lime contours of the label volume at
-    `central_z`, including the watershed cuts between touching nucleoids), so
-    the figure visibly shows the seeds and the per-peak regions feeding the
-    radial scans. `centroids`/`nucleoid_labels` default to None (no overlay)."""
+    """2x3 central-slice panel. The mtDNA panels overlay the detected nucleoid
+    seeds (yellow stars, for seeds on this slice) and the final per-peak
+    nucleoid boundaries (lime contours of the label volume at `central_z`,
+    including the watershed cuts between touching nucleoids), so the figure
+    shows the seeds and the per-peak regions feeding the radial scans. When
+    `mtdna_flat` (the top-hat-flattened detection image) is given, panel (0,1)
+    displays it — this is exactly what detection ran on — instead of the raw
+    foreground mask. `centroids`/`nucleoid_labels`/`mtdna_flat` default to None
+    (no overlay / fall back to the mask)."""
     from matplotlib.lines import Line2D
     fig, axes = plt.subplots(2, 3, figsize=(18, 12))
 
@@ -780,14 +840,23 @@ def render_analysis_png(
                label='nucleoid seed (this slice)'),
     ], loc='upper right', fontsize=8)
 
-    # (0,1) mtDNA foreground mask + nucleoid seeds/boundaries
+    # (0,1) top-hat-flattened mtDNA (what detection ran on) + seeds/boundaries;
+    #       falls back to the foreground mask if the flattened image isn't given.
     ax = axes[0, 1]
-    im = ax.imshow(mtdna_mask[central_z].astype(int), cmap='Blues', alpha=0.8)
-    _overlay_nucleoids(ax)
-    ax.set_title(f'mtDNA Foreground + Nucleoids - z={central_z}',
-                 fontsize=12, fontweight='bold')
-    ax.set_xlabel('X (pixels)'); ax.set_ylabel('Y (pixels)')
-    plt.colorbar(im, ax=ax, label='Binary')
+    if mtdna_flat is not None:
+        im = ax.imshow(mtdna_flat[central_z], cmap='Blues', alpha=0.9)
+        _overlay_nucleoids(ax)
+        ax.set_title(f'mtDNA flattened (top-hat) + Nucleoids - z={central_z}',
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('X (pixels)'); ax.set_ylabel('Y (pixels)')
+        plt.colorbar(im, ax=ax, label='Flattened intensity')
+    else:
+        im = ax.imshow(mtdna_mask[central_z].astype(int), cmap='Blues', alpha=0.8)
+        _overlay_nucleoids(ax)
+        ax.set_title(f'mtDNA Foreground + Nucleoids - z={central_z}',
+                     fontsize=12, fontweight='bold')
+        ax.set_xlabel('X (pixels)'); ax.set_ylabel('Y (pixels)')
+        plt.colorbar(im, ax=ax, label='Binary')
 
     # (0,2) mito channel
     ax = axes[0, 2]
@@ -1275,6 +1344,8 @@ def process_one_image_3d(
     septin_threshold_percentile,
     punct_scan_radius,
     min_nucleoid_voxels,
+    nucleoid_tophat_radius_nm,
+    nucleoid_prominence_sigma,
     nucleoid_peak_fraction,
     nucleoid_min_separation_nm,
     nucleoid_smoothing_nm,
@@ -1344,16 +1415,24 @@ def process_one_image_3d(
     mito_mask_3d, mito_thr = compute_mito_mask_3d(
         mito_ch, mito_threshold_percentile, mito_dilation
     )
-    mtdna_mask_3d, mtdna_thr = compute_percentile_mask_3d(
-        mtdna_ch, mtdna_threshold_percentile
-    )
+    # mtDNA percentile is a PERMISSIVE FOREGROUND FLOOR: it only excludes
+    # genuine black background and bounds the nucleoid watershed extent — it
+    # does NOT decide which puncta exist (the prominence detector below does).
+    # 0 => keep every non-zero voxel.
+    if mtdna_threshold_percentile <= 0:
+        mtdna_mask_3d = mtdna_ch > 0
+        mtdna_thr = 0.0
+    else:
+        mtdna_mask_3d, mtdna_thr = compute_percentile_mask_3d(
+            mtdna_ch, mtdna_threshold_percentile
+        )
     septin_mask_3d, septin_thr = compute_percentile_mask_3d(
         septin_ch, septin_threshold_percentile
     )
     click.echo(
         f"  thresholds (Pth percentile): "
         f"mito@{mito_threshold_percentile}={mito_thr:.1f}, "
-        f"mtDNA@{mtdna_threshold_percentile}={mtdna_thr:.1f}, "
+        f"mtDNA floor@{mtdna_threshold_percentile}={mtdna_thr:.1f}, "
         f"septin@{septin_threshold_percentile}={septin_thr:.1f}"
     )
 
@@ -1386,7 +1465,7 @@ def process_one_image_3d(
         f"outside={stats['avg_septin_outside_mito']:.2f}"
     )
 
-    # ---- Nucleoid detection (maxima + watershed + per-peak regions) -----
+    # ---- Nucleoid detection (top-hat + prominence + watershed + per-peak) --
     # Voxel sizes in microns (anisotropy-aware detection + radial distance
     # axis). Detection runs BEFORE the analysis PNG so the figure can overlay
     # the seeds and the per-peak nucleoid boundaries.
@@ -1394,17 +1473,27 @@ def process_one_image_3d(
     vy_um = float(voxel_size_y_nm) / 1000.0
     vz_um = float(voxel_size_z_nm) / 1000.0
 
-    centroids, nucleoid_labels, nucleoid_label_ids = _detect_nucleoids(
-        mtdna_mask_3d, min_nucleoid_voxels,
-        intensity=mtdna_raw,
-        min_separation_um=float(nucleoid_min_separation_nm) / 1000.0,
-        peak_fraction=float(nucleoid_peak_fraction),
+    # Background-flatten the mtDNA channel (white top-hat + optional smoothing);
+    # ALL detection runs on this flattened image. The raw channel is untouched
+    # for the radial profiles and per-nucleoid display.
+    mtdna_flat = flatten_mtdna(
+        mtdna_raw,
+        tophat_radius_um=float(nucleoid_tophat_radius_nm) / 1000.0,
         smoothing_um=float(nucleoid_smoothing_nm) / 1000.0,
         vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
     )
+    centroids, nucleoid_labels, nucleoid_label_ids = _detect_nucleoids(
+        mtdna_flat, mtdna_mask_3d, min_nucleoid_voxels,
+        prominence_sigma=float(nucleoid_prominence_sigma),
+        peak_fraction=float(nucleoid_peak_fraction),
+        min_separation_um=float(nucleoid_min_separation_nm) / 1000.0,
+        vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
+    )
     click.echo(f"  found {centroids.shape[0]} mtDNA nucleoids "
-               f"(min_voxels={min_nucleoid_voxels}, "
-               f"peak_fraction={nucleoid_peak_fraction:.2f})")
+               f"(tophat={nucleoid_tophat_radius_nm:.0f} nm, "
+               f"prominence_sigma={nucleoid_prominence_sigma:.1f}, "
+               f"peak_fraction={nucleoid_peak_fraction:.2f}, "
+               f"min_voxels={min_nucleoid_voxels})")
 
     # ---- Visualizations --------------------------------------------------
     central_z = z_slices // 2
@@ -1415,6 +1504,7 @@ def process_one_image_3d(
             mtdna_mask_3d, mito_mask_3d, area1_mask_3d, area2_mask_3d,
             central_z,
             centroids=centroids, nucleoid_labels=nucleoid_labels,
+            mtdna_flat=mtdna_flat,
         )
         click.echo(f"  wrote analysis PNG (central slice z={central_z})")
     if save_histogram_png_flag:
@@ -1698,12 +1788,13 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
                    'threshold for the mito mask.')
 @click.option('--mito-dilation', default=3, type=int, show_default=True,
               help='Binary-dilation iterations applied to the mito mask.')
-@click.option('--mtdna-threshold-percentile', default=99, type=float, show_default=True,
-              help='Whole-image foreground/background threshold: percentile of '
-                   'nonzero mtDNA voxels used to define the mtDNA foreground. '
-                   'This only removes background — nucleoids are then found by '
-                   'maxima + watershed + per-peak regions INSIDE this '
-                   'foreground (see --nucleoid-peak-fraction). Also used to '
+@click.option('--mtdna-threshold-percentile', default=50, type=float, show_default=True,
+              help='PERMISSIVE background floor only: percentile of nonzero '
+                   'mtDNA voxels that excludes genuine black background and '
+                   'bounds the nucleoid watershed extent. It does NOT decide '
+                   'which puncta exist — that is the prominence detector '
+                   '(--nucleoid-prominence-sigma). Lower it (0 = keep every '
+                   'non-zero voxel) to bound less aggressively. Also used to '
                    'build Area 1.')
 @click.option('--mtdna-dilation', default=3, type=int, show_default=True,
               help='Binary-dilation iterations applied to mtDNA when building '
@@ -1717,10 +1808,26 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
 @click.option('--min-nucleoid-voxels', default=5, type=int, show_default=True,
               help='Drop a nucleoid whose final per-peak region is smaller '
                    'than this many voxels.')
+@click.option('--nucleoid-tophat-radius-nm', default=300.0, type=float,
+              show_default=True,
+              help='White top-hat structuring-element radius (nm, physical) '
+                   'used to background-flatten the mtDNA channel before '
+                   'detection. Set a bit larger than a nucleoid so nucleoids '
+                   'survive while slowly varying background/illumination is '
+                   'subtracted. Anisotropic footprint from the voxel sizes. '
+                   'Set 0 to disable top-hat.')
+@click.option('--nucleoid-prominence-sigma', default=3.0, type=float,
+              show_default=True,
+              help='Prominence threshold for seed detection, in units of the '
+                   'flattened-image noise level: a seed (h-maximum) is kept '
+                   'only if it rises >= this many robust-sigma above its local '
+                   'surroundings. Scale-invariant, so dim and bright puncta '
+                   'are treated the same. Lower it to detect more (eventually '
+                   'noise); raise it to be stricter.')
 @click.option('--nucleoid-peak-fraction', default=0.30, type=float,
               show_default=True,
               help='Per-nucleoid relative intensity cutoff: within each '
-                   'watershed basin, keep only voxels whose (smoothed) mtDNA '
+                   'watershed basin, keep only voxels whose flattened mtDNA '
                    'signal is >= this fraction of THAT basin\'s own peak '
                    'maximum. This is RELATIVE to each nucleoid\'s own peak, '
                    'not a global threshold, so it shapes each nucleoid '
@@ -1728,14 +1835,15 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
 @click.option('--nucleoid-min-separation-nm', default=150.0, type=float,
               show_default=True,
               help='Minimum physical separation (nm) between two nucleoid '
-                   'intensity maxima. Set near your effective resolution / '
-                   'expected nucleoid spacing; larger values merge more, '
-                   'smaller values split more.')
+                   'seeds; closer seeds are consolidated (the brighter kept). '
+                   'Set near your effective resolution / expected nucleoid '
+                   'spacing; larger values merge more, smaller values split more.')
 @click.option('--nucleoid-smoothing-nm', default=50.0, type=float,
               show_default=True,
               help='Gaussian smoothing sigma (nm, physical) applied to the '
-                   'mtDNA channel before maxima detection, to suppress '
-                   'spurious peaks from noise. Set to 0 to disable.')
+                   'mtDNA channel AFTER the top-hat and before prominence '
+                   'detection, to suppress single-voxel noise peaks. Set to 0 '
+                   'to disable.')
 @click.option('--voxel-size-x-nm', default=25.0, type=float, show_default=True,
               help='Lateral pixel size in nm (X axis). Reported distances '
                    'are converted to microns using these voxel sizes.')
@@ -1762,6 +1870,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
          mtdna_threshold_percentile, mtdna_dilation,
          septin_threshold_percentile,
          punct_scan_radius, min_nucleoid_voxels,
+         nucleoid_tophat_radius_nm, nucleoid_prominence_sigma,
          nucleoid_peak_fraction, nucleoid_min_separation_nm, nucleoid_smoothing_nm,
          voxel_size_x_nm, voxel_size_y_nm, voxel_size_z_nm,
          save_channel_mrcs, save_analysis_png, save_histogram_png,
@@ -1790,12 +1899,16 @@ def main(input_dir, input_pattern, output_dir, run_name,
     click.echo(f"  mtdna_channel={mtdna_channel}, mito_channel={mito_channel}, "
                f"protein_channel={protein_channel}")
     click.echo(f"  mito thr={mito_threshold_percentile}%, dilation={mito_dilation}")
-    click.echo(f"  mtDNA thr={mtdna_threshold_percentile}%, dilation={mtdna_dilation}")
+    click.echo(f"  mtDNA background floor={mtdna_threshold_percentile}%, "
+               f"Area1 dilation={mtdna_dilation}")
     click.echo(f"  septin thr={septin_threshold_percentile}%")
     click.echo(f"  radial scan radius={punct_scan_radius} voxels, "
                f"min_nucleoid_voxels={min_nucleoid_voxels}")
-    click.echo(f"  nucleoid detection: maxima + watershed + per-peak regions "
-               f"(peak_fraction={nucleoid_peak_fraction:.2f}, "
+    click.echo(f"  nucleoid detection: top-hat + prominence h-maxima + "
+               f"watershed + per-peak regions "
+               f"(tophat={nucleoid_tophat_radius_nm:.0f} nm, "
+               f"prominence_sigma={nucleoid_prominence_sigma:.1f}, "
+               f"peak_fraction={nucleoid_peak_fraction:.2f}, "
                f"min_separation={nucleoid_min_separation_nm:.0f} nm, "
                f"smoothing={nucleoid_smoothing_nm:.0f} nm)")
     click.echo(f"  radial-scan mito mask: reuses the mito mask "
@@ -1823,6 +1936,8 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 septin_threshold_percentile=septin_threshold_percentile,
                 punct_scan_radius=punct_scan_radius,
                 min_nucleoid_voxels=min_nucleoid_voxels,
+                nucleoid_tophat_radius_nm=nucleoid_tophat_radius_nm,
+                nucleoid_prominence_sigma=nucleoid_prominence_sigma,
                 nucleoid_peak_fraction=nucleoid_peak_fraction,
                 nucleoid_min_separation_nm=nucleoid_min_separation_nm,
                 nucleoid_smoothing_nm=nucleoid_smoothing_nm,

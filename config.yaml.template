@@ -136,10 +136,11 @@ sted_colocalization_3d:
   # 3D mito mask: threshold at Pth percentile of nonzero mito voxels + dilate
   mito_threshold_percentile: 30
   mito_dilation: 3
-  # mtDNA foreground/background threshold (+ Area1 dilation). This percentile
-  # only removes background; nucleoids are then found by maxima + watershed +
-  # per-peak regions INSIDE this foreground.
-  mtdna_threshold_percentile: 99
+  # mtDNA PERMISSIVE background floor (+ Area1 dilation). This percentile only
+  # excludes genuine black background and bounds the nucleoid watershed extent;
+  # it does NOT decide which puncta exist (the prominence detector does).
+  # 0 = keep every non-zero voxel.
+  mtdna_threshold_percentile: 50
   mtdna_dilation: 3
   # Septin mask threshold (used for stats reporting)
   septin_threshold_percentile: 95
@@ -147,18 +148,22 @@ sted_colocalization_3d:
   punct_scan_radius: 20                # Profile radius (voxels, isotropic)
   min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
                                        # is smaller than this many voxels
-  # Nucleoid detection = local maxima (anisotropy-aware) -> seeded watershed ->
-  # per-peak region. Within each basin, keep voxels >= nucleoid_peak_fraction
-  # of THAT basin's own peak; this relative cutoff shapes each nucleoid, and
-  # the watershed boundary clips it where it meets a neighbour.
-  nucleoid_peak_fraction: 0.30         # Relative to each nucleoid's own peak
-                                       # (not global); lower it to grow regions
-  nucleoid_min_separation_nm: 150      # Min physical separation between two
-                                       # maxima; set near effective resolution
-                                       # / expected spacing. Larger merges
-                                       # more, smaller splits more.
-  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) applied before
-                                       # maxima detection; 0 disables.
+  # Nucleoid detection = white top-hat (background flatten) -> prominence
+  # h-maxima seeds -> seeded watershed -> per-peak region. A seed survives only
+  # if it rises >= prominence_sigma * noise above its surroundings, so dim and
+  # bright puncta are treated the same (recovers dim puncta a global threshold
+  # would drop).
+  nucleoid_tophat_radius_nm: 300       # Top-hat SE radius (a bit larger than a
+                                       # nucleoid); 0 disables background flatten
+  nucleoid_prominence_sigma: 3.0       # Seed prominence in robust-sigma units;
+                                       # lower detects more (eventually noise)
+  nucleoid_peak_fraction: 0.30         # Per-nucleoid cutoff, relative to each
+                                       # basin's own peak; lower grows regions
+  nucleoid_min_separation_nm: 150      # Consolidate seeds closer than this
+                                       # (keep the brighter); set near effective
+                                       # resolution / expected spacing
+  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) after top-hat,
+                                       # before prominence detection; 0 disables
   # The radial profile averages only voxels INSIDE the mito mask, and the mito
   # outline drawn on the per-nucleoid figures is that same mask. Both reuse the
   # single mito mask thresholded at `mito_threshold_percentile` (+ mito_dilation)

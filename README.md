@@ -269,23 +269,36 @@ percentile thresholds, computes the original Area1 (within K voxels of
 mtDNA, inside mito) vs Area2 (mito, away from mtDNA) septin intensity
 analysis, and on top of that produces a **per-nucleoid 3D radial intensity
 profile** in all three channels using spherical shells out to a configurable
-voxel radius. mtDNA "nucleoids" are detected by a **maxima → watershed →
-per-peak region** pipeline that runs entirely inside the mtDNA foreground:
-`mtdna_threshold_percentile` is now just a whole-image foreground/background
-threshold (it removes background, it does not define nucleoids). Inside that
-foreground the pipeline (1) detects local mtDNA-intensity maxima at least
-`nucleoid_min_separation_nm` apart (anisotropy-aware footprint built from the
-`voxel_size_*_nm` values, on the `nucleoid_smoothing_nm`-smoothed signal) —
-each maximum is one nucleoid seed; (2) seeds a watershed on the mtDNA
-intensity so two touching nucleoids are partitioned by a watershed boundary;
-and (3) defines each nucleoid as the voxels within its basin whose intensity
-is at least `nucleoid_peak_fraction` (default 0.30) of *that basin's own
-peak* — a relative, per-nucleoid cutoff. Lower `nucleoid_peak_fraction` to
-grow every region; touching nucleoids stay separated by the watershed
-boundary. Basins whose final region is below `min_nucleoid_voxels` are
-dropped. The seeds and per-peak boundaries are overlaid on the mtDNA panels
-of `{basename}_analysis.png`. Note this is spatial: two nucleoids closer than
-the effective resolution cannot be separated this way.
+voxel radius. mtDNA "nucleoids" are detected by a **background-flattened,
+prominence-based** pipeline designed to recover dim puncta that a global
+threshold would drop:
+
+1. **Background flatten** — a white top-hat (`skimage.morphology.white_tophat`)
+   with an anisotropic structuring element of physical radius
+   `nucleoid_tophat_radius_nm` (default 300, a bit larger than a nucleoid)
+   subtracts slowly varying background/illumination, followed by the optional
+   `nucleoid_smoothing_nm` Gaussian. All detection runs on this flattened image;
+   the raw channel is kept for the radial profiles / per-nucleoid display.
+2. **Prominence seeds** — seeds are `h_maxima` of the flattened image *not*
+   gated by any mask, so a peak is kept only if it rises at least `h` above its
+   local surroundings, with `h = nucleoid_prominence_sigma * noise` (default
+   `prominence_sigma = 3.0`) and `noise` a robust MAD estimate of the flattened
+   image. Because `h` scales with noise, dim-on-dim and bright-on-bright puncta
+   are treated the same. Seeds closer than `nucleoid_min_separation_nm` are
+   consolidated (brighter kept).
+3. **Watershed + per-peak region** — a seeded watershed on the inverted
+   flattened intensity, bounded by a *permissive* foreground floor, separates
+   touching nucleoids; within each basin only voxels ≥ `nucleoid_peak_fraction`
+   (default 0.30) of *that basin's own peak* are kept. Basins whose final region
+   is below `min_nucleoid_voxels` are dropped.
+
+`mtdna_threshold_percentile` is **demoted to a permissive background floor**
+(default 50, `0` = keep every non-zero voxel): it only excludes genuine black
+background and bounds the watershed extent — it does **not** decide which puncta
+exist. Lower `nucleoid_prominence_sigma` to detect more (eventually noise);
+lower `nucleoid_peak_fraction` to grow each region. The detected seeds and
+per-peak boundaries — plus the top-hat-flattened image detection actually ran
+on — are shown on the mtDNA panels of `{basename}_analysis.png`.
 
 Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_{septin|mito|mtDNA}.mrc` — single-channel float32 MRC exports
@@ -355,19 +368,25 @@ sted_colocalization_3d:
   protein_channel: 2
   mito_threshold_percentile: 30        # Percentile of nonzero mito voxels
   mito_dilation: 3                     # Binary-dilation iterations
-  mtdna_threshold_percentile: 99
+  mtdna_threshold_percentile: 50       # PERMISSIVE background floor only (0 =
+                                       # keep every non-zero voxel); does NOT
+                                       # decide which puncta exist
   mtdna_dilation: 3                    # Area1 = dilated mtDNA ∩ mito
   septin_threshold_percentile: 95      # For stats reporting
   punct_scan_radius: 20                # Radial profile radius (voxels)
   min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
                                        # is smaller than this many voxels
+  nucleoid_tophat_radius_nm: 300       # White top-hat SE radius (background
+                                       # flatten); a bit > a nucleoid; 0 = off
+  nucleoid_prominence_sigma: 3.0       # Seed prominence in robust-sigma units;
+                                       # lower detects more (eventually noise)
   nucleoid_peak_fraction: 0.30         # Per-nucleoid relative cutoff: keep basin
                                        # voxels >= this fraction of the basin's
                                        # own peak (lower it to grow regions)
-  nucleoid_min_separation_nm: 150      # Min separation between two maxima;
-                                       # larger merges more, smaller splits more
-  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) before maxima
-                                       # detection; 0 disables
+  nucleoid_min_separation_nm: 150      # Consolidate seeds closer than this
+                                       # (keep the brighter one)
+  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) after top-hat,
+                                       # before prominence detection; 0 disables
   # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
   # radial profile (so intensity vs distance reflects mito interior only).
   radial_scan_mito_threshold_percentile: 99
