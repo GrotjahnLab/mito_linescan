@@ -42,7 +42,7 @@ sted_colocalization_3d:
   septin_threshold_percentile: 95
   punct_scan_radius: 20
   min_nucleoid_voxels: 5
-  split_nucleoids: true
+  nucleoid_peak_fraction: 0.30
   nucleoid_min_separation_nm: 150
   nucleoid_smoothing_nm: 50
   save_channel_mrcs: false

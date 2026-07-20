@@ -147,7 +147,7 @@ sted_colocalization_3d:
   # Spatial splitting of merged mtDNA punctae: within each connected component,
   # detect local intensity maxima (anisotropy-aware) and seed a watershed so
   # two nucleoids fused into one blob are counted as separate nucleoids.
-  split_nucleoids: true                # false = one centroid per component
+  nucleoid_peak_fraction: 0.30         # Per-nucleoid relative cutoff (grow regions by lowering)
   nucleoid_min_separation_nm: 150      # Min physical separation between two
                                        # maxima; set near effective resolution
                                        # / expected spacing. Larger merges

@@ -269,18 +269,23 @@ percentile thresholds, computes the original Area1 (within K voxels of
 mtDNA, inside mito) vs Area2 (mito, away from mtDNA) septin intensity
 analysis, and on top of that produces a **per-nucleoid 3D radial intensity
 profile** in all three channels using spherical shells out to a configurable
-voxel radius. mtDNA "nucleoids" are derived from the connected components of
-the 3D mtDNA binary mask, filtered by a minimum voxel count. By default
-(`split_nucleoids: true`) each component is further **spatially split** so
-that two nucleoids fused into a single punctum are counted separately: within
-each component the pipeline detects local mtDNA-intensity maxima at least
-`nucleoid_min_separation_nm` apart (using an anisotropy-aware footprint built
-from the `voxel_size_*_nm` values) and seeds a watershed on the mtDNA
-intensity, so each basin becomes one nucleoid. A component with a single
-maximum comes back whole, so isolated punctae are unaffected. Set
-`split_nucleoids: false` to revert to one centroid per connected component.
-Note this splitting is spatial: two nucleoids closer than the effective
-resolution cannot be separated this way.
+voxel radius. mtDNA "nucleoids" are detected by a **maxima → watershed →
+per-peak region** pipeline that runs entirely inside the mtDNA foreground:
+`mtdna_threshold_percentile` is now just a whole-image foreground/background
+threshold (it removes background, it does not define nucleoids). Inside that
+foreground the pipeline (1) detects local mtDNA-intensity maxima at least
+`nucleoid_min_separation_nm` apart (anisotropy-aware footprint built from the
+`voxel_size_*_nm` values, on the `nucleoid_smoothing_nm`-smoothed signal) —
+each maximum is one nucleoid seed; (2) seeds a watershed on the mtDNA
+intensity so two touching nucleoids are partitioned by a watershed boundary;
+and (3) defines each nucleoid as the voxels within its basin whose intensity
+is at least `nucleoid_peak_fraction` (default 0.30) of *that basin's own
+peak* — a relative, per-nucleoid cutoff. Lower `nucleoid_peak_fraction` to
+grow every region; touching nucleoids stay separated by the watershed
+boundary. Basins whose final region is below `min_nucleoid_voxels` are
+dropped. The seeds and per-peak boundaries are overlaid on the mtDNA panels
+of `{basename}_analysis.png`. Note this is spatial: two nucleoids closer than
+the effective resolution cannot be separated this way.
 
 Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_{septin|mito|mtDNA}.mrc` — single-channel float32 MRC exports
@@ -354,9 +359,11 @@ sted_colocalization_3d:
   mtdna_dilation: 3                    # Area1 = dilated mtDNA ∩ mito
   septin_threshold_percentile: 95      # For stats reporting
   punct_scan_radius: 20                # Radial profile radius (voxels)
-  min_nucleoid_voxels: 5               # Drop tiny mtDNA components/basins
-  split_nucleoids: true                # Split merged punctae (watershed);
-                                       # false = one centroid per component
+  min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
+                                       # is smaller than this many voxels
+  nucleoid_peak_fraction: 0.30         # Per-nucleoid relative cutoff: keep basin
+                                       # voxels >= this fraction of the basin's
+                                       # own peak (lower it to grow regions)
   nucleoid_min_separation_nm: 150      # Min separation between two maxima;
                                        # larger merges more, smaller splits more
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) before maxima

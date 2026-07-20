@@ -138,11 +138,13 @@ sted_colocalization_3d:
   septin_threshold_percentile: 95
   # 3D radial intensity profile around mtDNA nucleoid centroids
   punct_scan_radius: 20                # Profile radius (voxels, isotropic)
-  min_nucleoid_voxels: 5               # Drop tiny mtDNA components/basins
-  # Spatial splitting of merged mtDNA punctae: within each connected component,
-  # detect local intensity maxima (anisotropy-aware) and seed a watershed so
-  # two nucleoids fused into one blob are counted as separate nucleoids.
-  split_nucleoids: true                # false = one centroid per component
+  min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
+                                       # is smaller than this many voxels
+  # Nucleoid detection = local maxima (anisotropy-aware) -> seeded watershed ->
+  # per-peak region (keep voxels >= nucleoid_peak_fraction of each basin's own
+  # peak). The watershed boundary clips a region where it meets a neighbour.
+  nucleoid_peak_fraction: 0.30         # Relative to each nucleoid's own peak
+                                       # (not global); lower it to grow regions
   nucleoid_min_separation_nm: 150      # Min physical separation between two
                                        # maxima; set near effective resolution
                                        # / expected spacing. Larger merges
