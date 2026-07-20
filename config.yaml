@@ -149,11 +149,10 @@ sted_colocalization_3d:
                                        # more, smaller splits more.
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) applied before
                                        # maxima detection; 0 disables.
-  # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
-  # radial profile (so "intensity vs distance" reflects mito interior only).
-  # Independent of mito_threshold_percentile above, which drives Area1/Area2.
-  radial_scan_mito_threshold_percentile: 99
-  radial_scan_mito_dilation: 3
+  # The radial profile averages only voxels INSIDE the mito mask, and the mito
+  # outline drawn on the per-nucleoid figures is that same mask. Both reuse the
+  # single mito mask thresholded at `mito_threshold_percentile` (+ mito_dilation)
+  # above — the mito signal is thresholded exactly once.
   # Voxel sizes in NANOMETERS. The radial profile uses the true anisotropic
   # Euclidean distance and reports the distance axis (CSV column
   # `distance_um`, plot x-axis) in MICRONS. Defaults are typical for 3D
