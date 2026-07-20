@@ -39,7 +39,6 @@ network_line_scan:
   mask_channel: null  # 0-based index of channel to use as cell mask (Otsu threshold).
                       # If set, takes priority over mask_dir_input and lasso drawing.
                       # Set to null to fall back to mask_dir_input or lasso.
-  use_gui: true  # Use interactive GUI for mask selection
   scan_width: 4  # Pixels on each side of the path for scanning
   path_sampling: 5  # Number of subpixel samples along the normal
   min_path_length: 30  # Minimum path length to process

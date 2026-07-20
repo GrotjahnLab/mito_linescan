@@ -36,7 +36,6 @@ network_line_scan:
   run_name: 'run1'  # Run name suffix for output directories
   mito_channel: 0  # 0-based index for mitochondria channel
   protein_channel: 2  # 0-based index for protein channel
-  use_gui: true  # Use interactive GUI for mask selection
   scan_width: 4  # Pixels on each side of the path for scanning
   path_sampling: 5  # Number of subpixel samples along the normal
   min_path_length: 30  # Minimum path length to process
