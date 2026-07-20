@@ -1,4 +1,17 @@
 [tool.pytest.ini_options]
-# Phase-1 regression harness. Phase 2 grows this into a full suite + CI.
+# Phase-1 regression harness, grown in Phase 2 (TEST-2..TEST-7) + CI.
 testpaths = ["tests"]
 addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+# Don't lint bundled example outputs or the read-only audit record.
+extend-exclude = ["audit", "examples", ".phase1_smoke_out"]
+
+[tool.ruff.lint]
+# Phase 2 runs ruff as an error-catcher, not a style enforcer: only the
+# "would crash / definitely wrong" rules — syntax errors (E9), broken
+# comparisons/asserts (F63), misplaced statements (F7), and undefined names
+# (F82, i.e. the mito_cmap-style latent NameError from Phase 1). The full
+# style sweep (unused imports, etc.) is deferred to Phase 5.
+select = ["E9", "F63", "F7", "F82"]
