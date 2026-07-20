@@ -69,8 +69,9 @@ def visualize_intensity_profiles(pkl_file, output_dir=None, intensity_threshold=
         normal_line_points = point_data['normal_line_points']
         distances = np.array(point_data['normal_distances'])
 
-        #smooth all the profiles
-        distances= smooth_profile(distances, window=3)
+        # SCI-1: never smooth the coordinate (distance) axis — it is the `xp`
+        # grid for np.interp and must stay raw and strictly monotonic. Smooth
+        # only the intensity profiles.
         mito_int = smooth_profile(mito_int, window=3)
         target_int = smooth_profile(target_int, window=3)
         mask_int = smooth_profile(mask_int, window=3)

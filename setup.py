@@ -12,7 +12,6 @@ setup(
             "mito_mask=mito_linescan.mito_mask:main",
             "mito_mask_refine=mito_linescan.mito_mask_refine:main",
             "mito_protein_line_scanner=mito_linescan.mito_protein_line_scanner:main",
-            "mito_protein_omm_localization=mito_linescan.mito_protein_omm_localization:main",
             "mito_protein_omm_normal_scanner=mito_linescan.mito_protein_omm_normal_scanner:main",
             "mask_thickness=mito_linescan.mask_thickness_util:main",
         ],

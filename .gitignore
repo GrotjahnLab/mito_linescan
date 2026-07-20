@@ -137,3 +137,9 @@ example/
 *.swp
 *.swo
 *~
+
+# Local read-only audit findings (never committed)
+audit/
+
+# Phase-1 headless smoke scratch outputs
+.phase1_smoke_out/

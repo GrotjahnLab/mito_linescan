@@ -2,6 +2,7 @@
 import sys
 import os
 import glob
+from typing import NamedTuple
 
 import click
 import tqdm
@@ -31,6 +32,21 @@ from skimage.morphology import skeletonize
 import sknw
 
 from scipy.signal import find_peaks, peak_prominences
+
+
+class MitoMaskResult(NamedTuple):
+    """Return type of the ridge-filter mask builders.
+
+    BP-2: producing a named 5-tuple means a caller that unpacks the wrong
+    number of values fails loudly at the call site instead of silently
+    mis-binding fields.
+    """
+    threshold: float
+    binary: object
+    skeleton: object
+    graph: object
+    params: dict
+
 
 # Global variables for colormaps (initialized on first use)
 _mito_cmap = None
@@ -221,192 +237,6 @@ def lasso_select_cell(mito_image, protein_image=None):
 
 
 
-
-def select_threshold(image):
-    """
-    Display an image with an interactive slider to pick a threshold.
-    Returns the chosen threshold (float).
-    """
-    import matplotlib.pyplot as plt
-
-    img = np.array(image, copy=False)
-    # robust display range
-    vmin0 = float(np.percentile(img, 1))
-    vmax0 = float(np.percentile(img, 99))
-
-    # initial threshold: midpoint of display range
-    init_thresh = float((vmin0 + vmax0) / 2.0)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plt.subplots_adjust(bottom=0.25)
-    ax.set_title("Adjust threshold with the slider. Click Done when finished.")
-    im = ax.imshow(img, cmap="gray", vmin=vmin0, vmax=vmax0)
-    overlay = ax.imshow((img > init_thresh).astype(np.uint8), cmap=plt.cm.Reds, alpha=0.4, vmin=0, vmax=1)
-
-    axcolor = 'lightgoldenrodyellow'
-    ax_slider = fig.add_axes([0.15, 0.12, 0.7, 0.03], facecolor=axcolor)
-    slider = Slider(ax_slider, 'Threshold', float(img.min()), float(img.max()), valinit=init_thresh)
-
-    done = {'pressed': False}
-
-    def update(val):
-        thr = slider.val
-        mask = (img > thr).astype(np.uint8)
-        overlay.set_data(mask)
-        fig.canvas.draw_idle()
-
-    slider.on_changed(update)
-
-    ax_done = fig.add_axes([0.85, 0.02, 0.1, 0.05])
-    btn = Button(ax_done, 'Done')
-
-    def on_done(event):
-        done['pressed'] = True
-        plt.close(fig)
-
-    btn.on_clicked(on_done)
-
-    plt.show()
-
-    # If the user closed the window manually, return the current slider value
-    return float(slider.val)
-
-def select_threshold_gui(image):
-    """
-    Display an image with an interactive slider to pick a threshold.
-    Returns the chosen threshold (float).
-    """
-    import matplotlib.pyplot as plt
-
-    img = np.array(image, copy=False)
-    # robust display range
-    vmin0 = float(np.percentile(img, 1))
-    vmax0 = float(np.percentile(img, 99))
-
-    # initial threshold: midpoint of display range
-    init_thresh = float((vmin0 + vmax0) / 2.0)
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    plt.subplots_adjust(bottom=0.25)
-    ax.set_title("Adjust threshold with the slider. Click Done when finished.")
-    im = ax.imshow(img, cmap="gray", vmin=vmin0, vmax=vmax0)
-    overlay = ax.imshow((img > init_thresh).astype(np.uint8), cmap=plt.cm.Reds, alpha=0.4, vmin=0, vmax=1)
-
-    axcolor = 'lightgoldenrodyellow'
-    ax_slider = fig.add_axes([0.15, 0.12, 0.7, 0.03], facecolor=axcolor)
-    slider = Slider(ax_slider, 'Threshold', float(img.min()), float(img.max()), valinit=init_thresh)
-
-    done = {'pressed': False}
-
-    def update(val):
-        thr = slider.val
-        mask = (img > thr).astype(np.uint8)
-        overlay.set_data(mask)
-        fig.canvas.draw_idle()
-
-    slider.on_changed(update)
-
-    ax_done = fig.add_axes([0.85, 0.02, 0.1, 0.05])
-    btn = Button(ax_done, 'Done')
-
-    def on_done(event):
-        done['pressed'] = True
-        plt.close(fig)
-
-    btn.on_clicked(on_done)
-
-    plt.show()
-
-    # If the user closed the window manually, return the current slider value
-    binarization_threshold = float(slider.val)
-    mito_binary = img > binarization_threshold
-    mito_skeleton, mito_nx = binary_to_sknw(mito_binary)
-    
-    # track whether user explicitly confirmed the threshold
-    threshold_confirmed = False
-
-    show_graph = True
-    fig = plt.figure(figsize=(10, 10))
-    ax = fig.add_subplot(111)
-    ax.set_facecolor('black')
-
-    # prepare initial network position mapping
-    nodes = mito_nx.nodes()
-    pos = {n: (nodes[n]['o'][1], nodes[n]['o'][0]) for n in nodes}
-    node_labels = {node: node for node in mito_nx.nodes()}
-
-    # draw the underlying images once (keeps extent/zoom consistent)
-    im_mito = ax.imshow(image, cmap='gray', alpha=0.6)
-    im_skel = ax.imshow(mito_skeleton, cmap=mito_cmap, alpha=1, visible=show_graph)
-
-    # draw network elements and keep references to the artists so we can toggle visibility
-    #edge_art = nx.draw_networkx_edges(mito_nx, pos, ax=ax, edge_color='yellow', alpha=0.7)
-    node_art = nx.draw_networkx_nodes(mito_nx, pos, ax=ax, node_color='red', node_size=50, alpha=0.9)
-    label_art = nx.draw_networkx_labels(mito_nx, pos, labels=node_labels, font_color='white', ax=ax)
-
-    # helper that sets visibility for either a single artist or an iterable of artists
-    def _set_visible(art, visible):
-        if art is None:
-            return
-        try:
-            # many NetworkX draw functions return a single Matplotlib collection,
-            # but some return lists/iterables; handle both.
-            for a in art:
-                a.set_visible(visible)
-        except TypeError:
-            art.set_visible(visible)
-
-    # apply initial visibility and keep zoom/pan behavior stable
-    #_set_visible(edge_art, show_graph)
-    _set_visible(node_art, show_graph)
-    for t in label_art.values():
-        t.set_visible(show_graph)
-    ax.set_title("Mitochondria Skeleton and Network")
-    ax.autoscale(enable=False)  # ensure toggling doesn't change axis limits
-
-    # add a toggle button to show/hide the graph
-    ax_button = fig.add_axes([0.85, 0.92, 0.12, 0.05])
-    btn_toggle = Button(ax_button, 'Hide Graph' if show_graph else 'Show Graph')
-
-    def on_toggle(event):
-        nonlocal show_graph
-        show_graph = not show_graph
-        btn_toggle.label.set_text('Hide Graph' if show_graph else 'Show Graph')
-        # toggle visibility of the skeleton and network artists without clearing/redrawing the axes
-        im_skel.set_visible(show_graph)
-        #_set_visible(edge_art, show_graph)
-        _set_visible(node_art, show_graph)
-        for t in label_art.values():
-            t.set_visible(show_graph)
-        fig.canvas.draw_idle()
-
-    btn_toggle.on_clicked(on_toggle)
-
-
-    #add another button to labeled "Confirm Threshold"
-    ax_button_confirm = fig.add_axes([0.7, 0.92, 0.12, 0.05])
-    btn_confirm = Button(ax_button_confirm, 'Confirm Threshold')
-    def on_confirm(event):
-        nonlocal threshold_confirmed
-        # close the specific figure to ensure the GUI window is closed
-        plt.close(fig)
-        threshold_confirmed = True
-        # reference the event to avoid unused-parameter warnings
-        _ = event
-        # reopen the threshold GUI and update the local outputs
-        #binarization_threshold, mito_binary, mito_skeleton, mito_nx = select_threshold_gui(image)
-    btn_confirm.on_clicked(on_confirm)
-    plt.draw()
-
-    plt.show()
-
-    if threshold_confirmed:
-        print("Threshold confirmed by user.")
-        return binarization_threshold, mito_binary, mito_skeleton, mito_nx
-    else:
-        # If the user did not confirm, re-open the GUI and return its result
-        # so the caller always receives the expected tuple instead of None.
-        return select_threshold_gui(image)
 
 def binary_to_sknw(binary_image):
     mito_skeleton = skeletonize(binary_image, method='lee')
@@ -990,7 +820,7 @@ def select_mask_gui(
         'max_thickness':      float(state['max_thick']),
         'ridge_threshold':    float(threshold_value),
     }
-    return float(threshold_value), binary_final, skel, graph, final_params
+    return MitoMaskResult(float(threshold_value), binary_final, skel, graph, final_params)
 
 
 def compute_mito_mask_noninteractive(
@@ -1080,7 +910,7 @@ def compute_mito_mask_noninteractive(
         'max_thickness':        float(max_thickness),
         'ridge_threshold':      float(thr),
     }
-    return float(thr), bn_final, skel, graph, final_params
+    return MitoMaskResult(float(thr), bn_final, skel, graph, final_params)
 
 
 def process_images(
@@ -1395,7 +1225,6 @@ def process_images(
 @click.option('--mask-channel', default=None, type=int,
               help='0-based index of a channel to use as the cell mask (Otsu threshold). '
                    'Takes priority over --mask-dir-input and lasso drawing.')
-@click.option('--use-gui/--no-gui', default=True, help='Use interactive GUI for threshold selection')
 @click.option('--scan-width', default=4, type=int, help='Pixels on each side of the path for scanning')
 @click.option('--path-sampling', default=5, type=int, help='Number of subpixel samples along the normal')
 @click.option('--min-path-length', default=30, type=int, help='Minimum path length to process')
@@ -1428,7 +1257,7 @@ def process_images(
                    '(post-thickness-filter) as `{basename}_mito_binary.tif` '
                    '(uint8, 0/255). Leave empty to skip saving.')
 def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
-         mito_channel, protein_channel, mask_channel, use_gui, scan_width, path_sampling,
+         mito_channel, protein_channel, mask_channel, scan_width, path_sampling,
          min_path_length, tubule_radius, sensitivity, min_object_size,
          gap_closing, use_thickness_filter, min_thickness, max_thickness,
          binary_mask_dir_output):
@@ -1450,7 +1279,11 @@ def main(input_dir, input_pattern, mask_dir_output, mask_dir_input, run_name,
         run_name=run_name,
         mito_ch=mito_channel,
         protein_ch=protein_channel,
-        use_threshold_gui=use_gui,
+        # DEBT-1/BP-1: the --use-gui/--no-gui flag was removed because
+        # config_to_args emitted --no-use-gui, which never matched. The
+        # network_line_scan CLI is headless-only; the interactive GUI path is
+        # still reachable via select_mask_gui in the library API.
+        use_threshold_gui=False,
         scan_width=scan_width,
         path_sampling=path_sampling,
         min_path_length=min_path_length,
