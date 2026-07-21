@@ -135,7 +135,7 @@ sted_colocalization_3d:
   # background and bounds the nucleoid watershed extent; does NOT decide which
   # puncta exist (the prominence detector does). 0 = keep every non-zero voxel.
   mtdna_threshold_percentile: 50
-  mtdna_dilation: 3
+  mtdna_dilation: 0
   # Septin mask threshold (used for stats reporting)
   septin_threshold_percentile: 95
   # 3D radial intensity profile around mtDNA nucleoid centroids

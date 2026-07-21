@@ -273,9 +273,15 @@ def compute_area_masks(mtdna_mask, mito_mask, mtdna_dilation):
        Area2 = mito_mask \\ Area1.
 
     Matches the original script's notion of 'within K voxels of mtDNA' vs
-    'inside mito, away from mtDNA'.
+    'inside mito, away from mtDNA'. `mtdna_dilation <= 0` means no dilation
+    (Area1 = mtDNA ∩ mito) — guarded because scipy's `binary_dilation` treats
+    ``iterations=0`` as "dilate until stable" (which would fill the whole mask).
     """
-    area1 = ndimage.binary_dilation(mtdna_mask, iterations=int(mtdna_dilation)) & mito_mask
+    if int(mtdna_dilation) > 0:
+        dilated = ndimage.binary_dilation(mtdna_mask, iterations=int(mtdna_dilation))
+    else:
+        dilated = mtdna_mask
+    area1 = dilated & mito_mask
     area2 = mito_mask & (~area1)
     return area1, area2
 
@@ -1796,9 +1802,10 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
                    '(--nucleoid-prominence-sigma). Lower it (0 = keep every '
                    'non-zero voxel) to bound less aggressively. Also used to '
                    'build Area 1.')
-@click.option('--mtdna-dilation', default=3, type=int, show_default=True,
+@click.option('--mtdna-dilation', default=0, type=int, show_default=True,
               help='Binary-dilation iterations applied to mtDNA when building '
-                   'Area 1 (within K voxels of mtDNA).')
+                   'Area 1 (within K voxels of mtDNA). 0 = no dilation '
+                   '(Area 1 = mtDNA ∩ mito).')
 @click.option('--septin-threshold-percentile', default=95, type=float, show_default=True,
               help='Percentile of nonzero septin voxels used as the binary '
                    'threshold for the septin mask (used for stats reporting).')

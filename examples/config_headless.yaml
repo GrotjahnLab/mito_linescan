@@ -38,7 +38,7 @@ sted_colocalization_3d:
   mito_threshold_percentile: 30
   mito_dilation: 3
   mtdna_threshold_percentile: 50
-  mtdna_dilation: 3
+  mtdna_dilation: 0
   septin_threshold_percentile: 95
   punct_scan_radius: 20
   min_nucleoid_voxels: 5

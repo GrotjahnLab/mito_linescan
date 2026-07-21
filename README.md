@@ -371,7 +371,7 @@ sted_colocalization_3d:
   mtdna_threshold_percentile: 50       # PERMISSIVE background floor only (0 =
                                        # keep every non-zero voxel); does NOT
                                        # decide which puncta exist
-  mtdna_dilation: 3                    # Area1 = dilated mtDNA ∩ mito
+  mtdna_dilation: 0                    # 0 = no dilation (Area1 = mtDNA ∩ mito)
   septin_threshold_percentile: 95      # For stats reporting
   punct_scan_radius: 20                # Radial profile radius (voxels)
   min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
