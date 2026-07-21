@@ -59,6 +59,13 @@ Per-image outputs (in {output_dir}/{basename}{run_name}/):
                                        λ1≥λ2≥λ3). sphericity = sqrt(λ3/λ1),
                                        1=spherical intensity distribution,
                                        →0=rod/disc)
+  {basename}_nucleoid_summary.csv      one row per nucleoid: image_name,
+                                       nucleoid_id, z, y, x, size_voxels,
+                                       on_mito, sphericity, lambda1..3_um2, and
+                                       radial_distance_um + mtdna/mito/septin
+                                       _profile as ';'-joined strings (the full
+                                       per-channel radial scan packed into one
+                                       cell each; split on ';' to parse)
   {basename}_radial_profiles.png       per-image 3-panel mean ± SEM plot
                                        (mtDNA / mito / septin), same render
                                        as the pooled plot but over this
@@ -556,13 +563,14 @@ def compute_nucleoid_shapes(label_volume, labels, intensity, basename,
     and, for split nucleoids, to the watershed cut plane.
 
     Returns a DataFrame ordered to match `labels` with columns:
-        image_name, nucleoid_id, lambda1_um2, lambda2_um2, lambda3_um2,
-        sphericity
+        image_name, nucleoid_id, size_voxels, lambda1_um2, lambda2_um2,
+        lambda3_um2, sphericity
+    `size_voxels` is the voxel count of the nucleoid's region in `label_volume`.
     NaN eigenvalues/sphericity for degenerate regions (zero total intensity
     or a fully collinear/planar set of voxels giving λ1 == 0).
     """
-    cols = ['image_name', 'nucleoid_id', 'lambda1_um2', 'lambda2_um2',
-            'lambda3_um2', 'sphericity']
+    cols = ['image_name', 'nucleoid_id', 'size_voxels', 'lambda1_um2',
+            'lambda2_um2', 'lambda3_um2', 'sphericity']
     if len(labels) == 0:
         return pd.DataFrame(columns=cols)
 
@@ -573,7 +581,7 @@ def compute_nucleoid_shapes(label_volume, labels, intensity, basename,
     objects = ndimage.find_objects(label_volume)
     rows = []
     for i, lab in enumerate(labels):
-        row = {'image_name': basename, 'nucleoid_id': i,
+        row = {'image_name': basename, 'nucleoid_id': i, 'size_voxels': 0,
                'lambda1_um2': np.nan, 'lambda2_um2': np.nan,
                'lambda3_um2': np.nan, 'sphericity': np.nan}
         sl = objects[lab - 1] if lab - 1 < len(objects) else None
@@ -581,6 +589,7 @@ def compute_nucleoid_shapes(label_volume, labels, intensity, basename,
             sub_lab = label_volume[sl]
             sub_int = intensity[sl]
             local = np.argwhere(sub_lab == lab)  # (M, 3) local (z, y, x)
+            row['size_voxels'] = int(local.shape[0])
             w = sub_int[sub_lab == lab]
             W = float(w.sum())
             if local.shape[0] >= 1 and W > 0:
@@ -602,6 +611,71 @@ def compute_nucleoid_shapes(label_volume, labels, intensity, basename,
         rows.append(row)
 
     return pd.DataFrame(rows, columns=cols)
+
+
+NUCLEOID_SUMMARY_COLS = [
+    'image_name', 'nucleoid_id', 'z', 'y', 'x', 'size_voxels', 'on_mito',
+    'sphericity', 'lambda1_um2', 'lambda2_um2', 'lambda3_um2',
+    'radial_distance_um', 'mtdna_profile', 'mito_profile', 'septin_profile',
+]
+
+
+def build_nucleoid_summary(radial_df, meta_df):
+    """One row per nucleoid: identity + centroid + size + shape descriptors +
+    the full per-channel radial profiles packed as ';'-joined strings.
+
+    `radial_df` is the long-format per-(nucleoid, distance) table from
+    `compute_radial_profiles_3d`; `meta_df` carries per-nucleoid `size_voxels`,
+    `sphericity`, and `lambda*_um2` (e.g. the shapes / half-max table). Both are
+    keyed on (`image_name`, `nucleoid_id`).
+
+    The three `*_profile` columns and `radial_distance_um` are ';'-joined so the
+    whole profile lives in one cell (parse with e.g.
+    ``df.mtdna_profile.str.split(';')``); the distance axis is identical across
+    channels. Returns an empty (typed) DataFrame when there are no nucleoids.
+    """
+    if radial_df is None or len(radial_df) == 0:
+        return pd.DataFrame(columns=NUCLEOID_SUMMARY_COLS)
+
+    meta = None
+    if meta_df is not None and len(meta_df):
+        meta = meta_df.drop_duplicates(['image_name', 'nucleoid_id']) \
+                      .set_index(['image_name', 'nucleoid_id'])
+
+    def _join(vals, fmt):
+        return ';'.join(fmt.format(float(v)) for v in vals)
+
+    rows = []
+    for (img, nid), sub in radial_df.groupby(['image_name', 'nucleoid_id'],
+                                             sort=True):
+        sub = sub.sort_values('distance_um')
+        row = {
+            'image_name': img,
+            'nucleoid_id': int(nid),
+            'z': int(sub['z'].iloc[0]),
+            'y': int(sub['y'].iloc[0]),
+            'x': int(sub['x'].iloc[0]),
+            'on_mito': bool(sub['on_mito'].iloc[0]),
+            'size_voxels': '',
+            'sphericity': np.nan,
+            'lambda1_um2': np.nan,
+            'lambda2_um2': np.nan,
+            'lambda3_um2': np.nan,
+            'radial_distance_um': _join(sub['distance_um'].values, '{:.4f}'),
+            'mtdna_profile': _join(sub['mtdna_intensity'].values, '{:.6g}'),
+            'mito_profile': _join(sub['mito_intensity'].values, '{:.6g}'),
+            'septin_profile': _join(sub['septin_intensity'].values, '{:.6g}'),
+        }
+        if meta is not None and (img, int(nid)) in meta.index:
+            m = meta.loc[(img, int(nid))]
+            sz = m.get('size_voxels', np.nan)
+            row['size_voxels'] = int(sz) if pd.notna(sz) else ''
+            for k in ('sphericity', 'lambda1_um2', 'lambda2_um2', 'lambda3_um2'):
+                if k in m.index:
+                    row[k] = m[k]
+        rows.append(row)
+
+    return pd.DataFrame(rows, columns=NUCLEOID_SUMMARY_COLS)
 
 
 def _normalize_3d(ch, mask=None):
@@ -1626,6 +1700,15 @@ def process_one_image_3d(
         click.echo(f"  wrote half-max distances ({len(half_max_df)} nucleoids) "
                    f"-> {os.path.basename(half_max_csv)}")
 
+        # Per-nucleoid summary: one row per nucleoid (identity + centroid + size
+        # + shape + full per-channel radial profiles as ';'-joined strings).
+        summary_df = build_nucleoid_summary(radial_df, half_max_df)
+        summary_csv = os.path.join(image_out_dir,
+                                   f"{basename}_nucleoid_summary.csv")
+        summary_df.to_csv(summary_csv, index=False)
+        click.echo(f"  wrote nucleoid summary ({len(summary_df)} nucleoids) "
+                   f"-> {os.path.basename(summary_csv)}")
+
         # Per-image radial profile PNG (mean ± SEM across this image's
         # nucleoids). Reuses the same render helper as the pooled output so
         # the two plots are visually consistent.
@@ -2029,6 +2112,16 @@ def main(input_dir, input_pattern, output_dir, run_name,
     _save_radial_profile_outputs_3d(radial_dfs, out_dir,
                                      radius=int(punct_scan_radius))
     _save_half_max_pooled(half_max_dfs, out_dir)
+    # Pooled per-nucleoid summary (one row per nucleoid across all images).
+    if radial_dfs:
+        pooled_summary = build_nucleoid_summary(
+            pd.concat(radial_dfs, ignore_index=True),
+            pd.concat(half_max_dfs, ignore_index=True) if half_max_dfs else None,
+        )
+        summary_out = os.path.join(out_dir, 'nucleoid_summary_pooled.csv')
+        pooled_summary.to_csv(summary_out, index=False)
+        click.echo(f"Wrote pooled nucleoid summary "
+                   f"({len(pooled_summary)} nucleoids) -> {summary_out}")
     click.echo(f"\nProcessed {len(image_list)} TIFF(s). Outputs in {out_dir}")
 
 

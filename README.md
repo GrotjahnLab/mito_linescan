@@ -339,6 +339,15 @@ Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
   nucleoids, to the watershed cut plane; note it captures ellipsoidal
   elongation/flatness, **not** surface roughness (a lumpy blob with the same
   second moments as a sphere still reads as spherical).
+- `{basename}_nucleoid_summary.csv` — **one row per nucleoid** with everything
+  in one place: `image_name, nucleoid_id, z, y, x, size_voxels, on_mito,
+  sphericity, lambda1_um2, lambda2_um2, lambda3_um2, radial_distance_um,
+  mtdna_profile, mito_profile, septin_profile`. `size_voxels` is the nucleoid's
+  region size. The last four columns pack the full per-channel radial scan into
+  a single cell each as `;`-joined values (the shared distance axis is
+  `radial_distance_um`, in µm); parse with e.g.
+  `df.mtdna_profile.str.split(';')`. Pooled across images as
+  `nucleoid_summary_pooled.csv` in the output root.
 - `{basename}_radial_profiles.png` — per-image 3-panel mean ± SEM plot
   (mtDNA / mito / septin) computed from this image's nucleoids only; same
   visual style as the pooled plot below for easy comparison
