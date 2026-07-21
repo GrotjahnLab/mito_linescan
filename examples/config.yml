@@ -156,6 +156,7 @@ sted_colocalization_3d:
                                        # more, smaller splits more.
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) applied before
   require_mito_overlap: false
+  exclude_border_nucleoids: true
                                        # maxima detection; 0 disables.
   # Output toggles
   save_channel_mrcs: true              # Per-channel float32 MRC exports

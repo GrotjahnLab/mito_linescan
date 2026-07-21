@@ -48,6 +48,7 @@ sted_colocalization_3d:
   nucleoid_min_separation_nm: 3
   nucleoid_smoothing_nm: 50
   require_mito_overlap: false
+  exclude_border_nucleoids: true
   save_channel_mrcs: false
   save_analysis_png: true
   save_histogram_png: true

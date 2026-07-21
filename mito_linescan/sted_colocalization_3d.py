@@ -373,7 +373,8 @@ def _estimate_noise(signal):
 def _detect_nucleoids(signal, floor_mask, min_voxels, *,
                       prominence_sigma, peak_fraction, min_separation_um,
                       vx_um, vy_um, vz_um,
-                      mito_mask=None, require_mito_overlap=False):
+                      mito_mask=None, require_mito_overlap=False,
+                      exclude_border=True):
     """Detect mtDNA nucleoids by prominence (h-maxima) + watershed + per-peak
     regions on a background-flattened image.
 
@@ -385,6 +386,10 @@ def _detect_nucleoids(signal, floor_mask, min_voxels, *,
     dropped unless its final per-peak region shares at least one voxel with
     `mito_mask` (i.e. it must overlap a mitochondrion). This depends on the mito
     threshold/dilation that built `mito_mask`.
+
+    When `exclude_border` is True (default), a nucleoid is dropped if its final
+    region touches any face of the volume (a voxel at index 0 or the max index
+    on any axis) — such puncta are truncated by the field of view.
 
     1. Estimate a robust noise level from `signal` and set the prominence
        height h = `prominence_sigma` * noise (guarded > 0). Detect seeds with
@@ -468,10 +473,12 @@ def _detect_nucleoids(signal, floor_mask, min_voxels, *,
 
     # 4. Per-peak relative region: keep basin voxels >= frac * basin peak.
     use_mito = bool(require_mito_overlap) and mito_mask is not None
+    border_max = np.array(signal.shape) - 1
     label_volume = np.zeros(signal.shape, dtype=np.int32)
     coords, labels = [], []
     next_label = 0
     n_dropped_no_mito = 0
+    n_dropped_border = 0
     objects = ndimage.find_objects(basins)
     for seed in range(1, n_seeds + 1):
         sl = objects[seed - 1] if seed - 1 < len(objects) else None
@@ -489,22 +496,30 @@ def _detect_nucleoids(signal, floor_mask, min_voxels, *,
         if use_mito and not (region_sub & mito_mask[sl]).any():
             n_dropped_no_mito += 1
             continue
+        local = np.argwhere(region_sub)
+        gcoords = local + np.array([s.start for s in sl])  # global int coords
+        # Optional: drop nucleoids truncated by the field of view (region
+        # touches any volume face).
+        if exclude_border and bool((gcoords.min(axis=0) == 0).any()
+                                   or (gcoords.max(axis=0) == border_max).any()):
+            n_dropped_border += 1
+            continue
         next_label += 1
         label_volume[sl][region_sub] = next_label  # view via slice -> writes through
-        local = np.argwhere(region_sub)
-        offset = np.array([s.start for s in sl], dtype=np.float64)
-        gc = local.mean(axis=0) + offset
+        gc = gcoords.mean(axis=0)
         coords.append((int(round(gc[0])), int(round(gc[1])), int(round(gc[2]))))
         labels.append(next_label)
 
     n_final = len(coords)
     mito_note = (f", {n_dropped_no_mito} dropped (no mito overlap)"
                  if use_mito else "")
+    border_note = (f", {n_dropped_border} dropped (touch border)"
+                   if exclude_border else "")
     click.echo(f"  nucleoid detection: noise={noise:.3g}, h={h:.3g}, "
                f"{n_seeds_raw} prominence seeds -> {n_seeds} after "
                f"min-separation -> {n_final} nucleoid(s) "
                f"(peak_fraction={frac:.2f}, min_voxels={int(min_voxels)}"
-               f"{mito_note})")
+               f"{mito_note}{border_note})")
     if not coords:
         return empty
     return (np.asarray(coords, dtype=np.int64), label_volume, labels)
@@ -1371,6 +1386,7 @@ def process_one_image_3d(
     nucleoid_min_separation_nm,
     nucleoid_smoothing_nm,
     require_mito_overlap,
+    exclude_border_nucleoids,
     voxel_size_x_nm,
     voxel_size_y_nm,
     voxel_size_z_nm,
@@ -1511,13 +1527,15 @@ def process_one_image_3d(
         min_separation_um=float(nucleoid_min_separation_nm) / 1000.0,
         vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
         mito_mask=mito_mask_3d, require_mito_overlap=require_mito_overlap,
+        exclude_border=exclude_border_nucleoids,
     )
     click.echo(f"  found {centroids.shape[0]} mtDNA nucleoids "
                f"(tophat={nucleoid_tophat_radius_nm:.0f} nm, "
                f"prominence_sigma={nucleoid_prominence_sigma:.1f}, "
                f"peak_fraction={nucleoid_peak_fraction:.2f}, "
                f"min_voxels={min_nucleoid_voxels}, "
-               f"require_mito_overlap={require_mito_overlap})")
+               f"require_mito_overlap={require_mito_overlap}, "
+               f"exclude_border={exclude_border_nucleoids})")
 
     # ---- Visualizations --------------------------------------------------
     central_z = z_slices // 2
@@ -1877,6 +1895,12 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
                    'mito mask (keep only mtDNA puncta on/inside a '
                    'mitochondrion). Overlap depends on --mito-threshold-'
                    'percentile / --mito-dilation, which build that mask.')
+@click.option('--exclude-border-nucleoids/--no-exclude-border-nucleoids',
+              default=True, show_default=True,
+              help='Drop nucleoids whose region touches any face of the volume '
+                   '(field-of-view edge, including the top/bottom Z slices) — '
+                   'these puncta are truncated. On by default; use '
+                   '--no-exclude-border-nucleoids to keep them.')
 @click.option('--voxel-size-x-nm', default=25.0, type=float, show_default=True,
               help='Lateral pixel size in nm (X axis). Reported distances '
                    'are converted to microns using these voxel sizes.')
@@ -1905,7 +1929,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
          punct_scan_radius, min_nucleoid_voxels,
          nucleoid_tophat_radius_nm, nucleoid_prominence_sigma,
          nucleoid_peak_fraction, nucleoid_min_separation_nm, nucleoid_smoothing_nm,
-         require_mito_overlap,
+         require_mito_overlap, exclude_border_nucleoids,
          voxel_size_x_nm, voxel_size_y_nm, voxel_size_z_nm,
          save_channel_mrcs, save_analysis_png, save_histogram_png,
          save_per_nucleoid_png):
@@ -1945,7 +1969,8 @@ def main(input_dir, input_pattern, output_dir, run_name,
                f"peak_fraction={nucleoid_peak_fraction:.2f}, "
                f"min_separation={nucleoid_min_separation_nm:.0f} nm, "
                f"smoothing={nucleoid_smoothing_nm:.0f} nm, "
-               f"require_mito_overlap={require_mito_overlap})")
+               f"require_mito_overlap={require_mito_overlap}, "
+               f"exclude_border={exclude_border_nucleoids})")
     click.echo(f"  radial-scan mito mask: reuses the mito mask "
                f"(@{mito_threshold_percentile}%, dilation={mito_dilation})")
     click.echo(f"  voxel size: x={voxel_size_x_nm:.1f} nm, "
@@ -1977,6 +2002,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 nucleoid_min_separation_nm=nucleoid_min_separation_nm,
                 nucleoid_smoothing_nm=nucleoid_smoothing_nm,
                 require_mito_overlap=require_mito_overlap,
+                exclude_border_nucleoids=exclude_border_nucleoids,
                 voxel_size_x_nm=voxel_size_x_nm,
                 voxel_size_y_nm=voxel_size_y_nm,
                 voxel_size_z_nm=voxel_size_z_nm,

@@ -299,7 +299,10 @@ exist. Lower `nucleoid_prominence_sigma` to detect more (eventually noise);
 lower `nucleoid_peak_fraction` to grow each region. Set
 `require_mito_overlap: true` to keep only nucleoids whose region overlaps the
 mito mask (i.e. mtDNA on/inside a mitochondrion) — this depends on
-`mito_threshold_percentile`/`mito_dilation`, which build that mask. The
+`mito_threshold_percentile`/`mito_dilation`, which build that mask.
+`exclude_border_nucleoids` (default **true**) drops nucleoids whose region
+touches any face of the volume (field-of-view edge, incl. the top/bottom Z
+slices), since those puncta are truncated; set it false to keep them. The
 detected seeds and per-peak boundaries — plus the top-hat-flattened image
 detection actually ran on — are shown on the mtDNA panels of
 `{basename}_analysis.png`.
@@ -399,6 +402,8 @@ sted_colocalization_3d:
                                        # before prominence detection; 0 disables
   require_mito_overlap: false          # true = keep only nucleoids that overlap
                                        # the mito mask (mtDNA on/inside mito)
+  exclude_border_nucleoids: true       # drop nucleoids touching any volume face
+                                       # (truncated by the field of view)
   # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
   # radial profile (so intensity vs distance reflects mito interior only).
   radial_scan_mito_threshold_percentile: 99

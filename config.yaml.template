@@ -165,6 +165,7 @@ sted_colocalization_3d:
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) after top-hat,
                                        # before prominence detection; 0 disables
   require_mito_overlap: false          # true = drop nucleoids that don't overlap
+  exclude_border_nucleoids: true
                                        # the mito mask (mtDNA on/inside mito only)
   # The radial profile averages only voxels INSIDE the mito mask, and the mito
   # outline drawn on the per-nucleoid figures is that same mask. Both reuse the
