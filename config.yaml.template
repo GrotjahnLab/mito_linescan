@@ -140,13 +140,13 @@ sted_colocalization_3d:
   # excludes genuine black background and bounds the nucleoid watershed extent;
   # it does NOT decide which puncta exist (the prominence detector does).
   # 0 = keep every non-zero voxel.
-  mtdna_threshold_percentile: 50
+  mtdna_threshold_percentile: 90
   mtdna_dilation: 0
   # Septin mask threshold (used for stats reporting)
   septin_threshold_percentile: 95
   # 3D radial intensity profile around mtDNA nucleoid centroids
   punct_scan_radius: 20                # Profile radius (voxels, isotropic)
-  min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
+  min_nucleoid_voxels: 25              # Drop a nucleoid whose per-peak region
                                        # is smaller than this many voxels
   # Nucleoid detection = white top-hat (background flatten) -> prominence
   # h-maxima seeds -> seeded watershed -> per-peak region. A seed survives only
@@ -155,15 +155,17 @@ sted_colocalization_3d:
   # would drop).
   nucleoid_tophat_radius_nm: 300       # Top-hat SE radius (a bit larger than a
                                        # nucleoid); 0 disables background flatten
-  nucleoid_prominence_sigma: 3.0       # Seed prominence in robust-sigma units;
+  nucleoid_prominence_sigma: 5.0       # Seed prominence in robust-sigma units;
                                        # lower detects more (eventually noise)
   nucleoid_peak_fraction: 0.30         # Per-nucleoid cutoff, relative to each
                                        # basin's own peak; lower grows regions
-  nucleoid_min_separation_nm: 150      # Consolidate seeds closer than this
-                                       # (keep the brighter); set near effective
-                                       # resolution / expected spacing
+  nucleoid_min_separation_nm: 3        # Consolidate seeds closer than this; the
+                                       # default (3 nm < 1 voxel) is effectively
+                                       # off — raise to 150-500 to merge nearby
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) after top-hat,
                                        # before prominence detection; 0 disables
+  require_mito_overlap: false          # true = drop nucleoids that don't overlap
+                                       # the mito mask (mtDNA on/inside mito only)
   # The radial profile averages only voxels INSIDE the mito mask, and the mito
   # outline drawn on the per-nucleoid figures is that same mask. Both reuse the
   # single mito mask thresholded at `mito_threshold_percentile` (+ mito_dilation)

@@ -296,9 +296,18 @@ threshold would drop:
 (default 50, `0` = keep every non-zero voxel): it only excludes genuine black
 background and bounds the watershed extent — it does **not** decide which puncta
 exist. Lower `nucleoid_prominence_sigma` to detect more (eventually noise);
-lower `nucleoid_peak_fraction` to grow each region. The detected seeds and
-per-peak boundaries — plus the top-hat-flattened image detection actually ran
-on — are shown on the mtDNA panels of `{basename}_analysis.png`.
+lower `nucleoid_peak_fraction` to grow each region. Set
+`require_mito_overlap: true` to keep only nucleoids whose region overlaps the
+mito mask (i.e. mtDNA on/inside a mitochondrion) — this depends on
+`mito_threshold_percentile`/`mito_dilation`, which build that mask. The
+detected seeds and per-peak boundaries — plus the top-hat-flattened image
+detection actually ran on — are shown on the mtDNA panels of
+`{basename}_analysis.png`.
+
+The shipped defaults (`mtdna_threshold_percentile: 90`,
+`nucleoid_prominence_sigma: 5.0`, `min_nucleoid_voxels: 25`) are tuned to be
+fairly conservative; loosen them (lower the floor/sigma/min-voxels) to recover
+more, dimmer puncta.
 
 Per-image outputs (in `{output_dir}/{basename}{run_name}/`):
 - `{basename}_{septin|mito|mtDNA}.mrc` — single-channel float32 MRC exports
@@ -368,25 +377,28 @@ sted_colocalization_3d:
   protein_channel: 2
   mito_threshold_percentile: 30        # Percentile of nonzero mito voxels
   mito_dilation: 3                     # Binary-dilation iterations
-  mtdna_threshold_percentile: 50       # PERMISSIVE background floor only (0 =
+  mtdna_threshold_percentile: 90       # PERMISSIVE background floor only (0 =
                                        # keep every non-zero voxel); does NOT
                                        # decide which puncta exist
   mtdna_dilation: 0                    # 0 = no dilation (Area1 = mtDNA ∩ mito)
   septin_threshold_percentile: 95      # For stats reporting
   punct_scan_radius: 20                # Radial profile radius (voxels)
-  min_nucleoid_voxels: 5               # Drop a nucleoid whose per-peak region
+  min_nucleoid_voxels: 25              # Drop a nucleoid whose per-peak region
                                        # is smaller than this many voxels
   nucleoid_tophat_radius_nm: 300       # White top-hat SE radius (background
                                        # flatten); a bit > a nucleoid; 0 = off
-  nucleoid_prominence_sigma: 3.0       # Seed prominence in robust-sigma units;
+  nucleoid_prominence_sigma: 5.0       # Seed prominence in robust-sigma units;
                                        # lower detects more (eventually noise)
   nucleoid_peak_fraction: 0.30         # Per-nucleoid relative cutoff: keep basin
                                        # voxels >= this fraction of the basin's
                                        # own peak (lower it to grow regions)
-  nucleoid_min_separation_nm: 150      # Consolidate seeds closer than this
-                                       # (keep the brighter one)
+  nucleoid_min_separation_nm: 3        # Consolidate seeds closer than this; 3 nm
+                                       # (< 1 voxel) is effectively off; raise to
+                                       # 150-500 to merge nearby seeds
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) after top-hat,
                                        # before prominence detection; 0 disables
+  require_mito_overlap: false          # true = keep only nucleoids that overlap
+                                       # the mito mask (mtDNA on/inside mito)
   # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
   # radial profile (so intensity vs distance reflects mito interior only).
   radial_scan_mito_threshold_percentile: 99

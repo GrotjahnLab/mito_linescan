@@ -137,24 +137,25 @@ sted_colocalization_3d:
   mito_threshold_percentile: 30
   mito_dilation: 3
   # mtDNA mask + Area1 dilation
-  mtdna_threshold_percentile: 50       # Permissive background floor only
+  mtdna_threshold_percentile: 90       # Permissive background floor only
   mtdna_dilation: 0
   # Septin mask threshold (used for stats reporting)
   septin_threshold_percentile: 95
   # 3D radial intensity profile around mtDNA nucleoid centroids
   punct_scan_radius: 20                # Profile radius (voxels, isotropic)
-  min_nucleoid_voxels: 5               # Drop tiny mtDNA components/basins
+  min_nucleoid_voxels: 25               # Drop tiny mtDNA components/basins
   # Spatial splitting of merged mtDNA punctae: within each connected component,
   # detect local intensity maxima (anisotropy-aware) and seed a watershed so
   # two nucleoids fused into one blob are counted as separate nucleoids.
   nucleoid_tophat_radius_nm: 300       # Background-flatten SE radius (0=off)
-  nucleoid_prominence_sigma: 3.0       # Seed prominence in robust-sigma (lower=more)
+  nucleoid_prominence_sigma: 5.0       # Seed prominence in robust-sigma (lower=more)
   nucleoid_peak_fraction: 0.30         # Per-nucleoid relative cutoff (grow regions by lowering)
-  nucleoid_min_separation_nm: 150      # Min physical separation between two
+  nucleoid_min_separation_nm: 3      # Min physical separation between two
                                        # maxima; set near effective resolution
                                        # / expected spacing. Larger merges
                                        # more, smaller splits more.
   nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) applied before
+  require_mito_overlap: false
                                        # maxima detection; 0 disables.
   # Output toggles
   save_channel_mrcs: true              # Per-channel float32 MRC exports

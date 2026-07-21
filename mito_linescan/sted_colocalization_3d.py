@@ -372,13 +372,19 @@ def _estimate_noise(signal):
 
 def _detect_nucleoids(signal, floor_mask, min_voxels, *,
                       prominence_sigma, peak_fraction, min_separation_um,
-                      vx_um, vy_um, vz_um):
+                      vx_um, vy_um, vz_um,
+                      mito_mask=None, require_mito_overlap=False):
     """Detect mtDNA nucleoids by prominence (h-maxima) + watershed + per-peak
     regions on a background-flattened image.
 
     `signal` is the flattened detection image (see `flatten_mtdna`); `floor_mask`
     is a PERMISSIVE foreground floor that only excludes genuine black background
     and bounds the watershed extent — it does NOT decide which puncta exist.
+
+    When `require_mito_overlap` is True and `mito_mask` is given, a nucleoid is
+    dropped unless its final per-peak region shares at least one voxel with
+    `mito_mask` (i.e. it must overlap a mitochondrion). This depends on the mito
+    threshold/dilation that built `mito_mask`.
 
     1. Estimate a robust noise level from `signal` and set the prominence
        height h = `prominence_sigma` * noise (guarded > 0). Detect seeds with
@@ -461,9 +467,11 @@ def _detect_nucleoids(signal, floor_mask, min_voxels, *,
     basins = watershed(-signal, markers=markers, mask=ws_mask)
 
     # 4. Per-peak relative region: keep basin voxels >= frac * basin peak.
+    use_mito = bool(require_mito_overlap) and mito_mask is not None
     label_volume = np.zeros(signal.shape, dtype=np.int32)
     coords, labels = [], []
     next_label = 0
+    n_dropped_no_mito = 0
     objects = ndimage.find_objects(basins)
     for seed in range(1, n_seeds + 1):
         sl = objects[seed - 1] if seed - 1 < len(objects) else None
@@ -477,6 +485,10 @@ def _detect_nucleoids(signal, floor_mask, min_voxels, *,
         region_sub = basin_sub & (sig_sub >= frac * peak_val)
         if int(region_sub.sum()) < int(min_voxels):
             continue
+        # Optional: drop nucleoids that don't overlap a mitochondrion.
+        if use_mito and not (region_sub & mito_mask[sl]).any():
+            n_dropped_no_mito += 1
+            continue
         next_label += 1
         label_volume[sl][region_sub] = next_label  # view via slice -> writes through
         local = np.argwhere(region_sub)
@@ -486,10 +498,13 @@ def _detect_nucleoids(signal, floor_mask, min_voxels, *,
         labels.append(next_label)
 
     n_final = len(coords)
+    mito_note = (f", {n_dropped_no_mito} dropped (no mito overlap)"
+                 if use_mito else "")
     click.echo(f"  nucleoid detection: noise={noise:.3g}, h={h:.3g}, "
                f"{n_seeds_raw} prominence seeds -> {n_seeds} after "
                f"min-separation -> {n_final} nucleoid(s) "
-               f"(peak_fraction={frac:.2f}, min_voxels={int(min_voxels)})")
+               f"(peak_fraction={frac:.2f}, min_voxels={int(min_voxels)}"
+               f"{mito_note})")
     if not coords:
         return empty
     return (np.asarray(coords, dtype=np.int64), label_volume, labels)
@@ -1355,6 +1370,7 @@ def process_one_image_3d(
     nucleoid_peak_fraction,
     nucleoid_min_separation_nm,
     nucleoid_smoothing_nm,
+    require_mito_overlap,
     voxel_size_x_nm,
     voxel_size_y_nm,
     voxel_size_z_nm,
@@ -1494,12 +1510,14 @@ def process_one_image_3d(
         peak_fraction=float(nucleoid_peak_fraction),
         min_separation_um=float(nucleoid_min_separation_nm) / 1000.0,
         vx_um=vx_um, vy_um=vy_um, vz_um=vz_um,
+        mito_mask=mito_mask_3d, require_mito_overlap=require_mito_overlap,
     )
     click.echo(f"  found {centroids.shape[0]} mtDNA nucleoids "
                f"(tophat={nucleoid_tophat_radius_nm:.0f} nm, "
                f"prominence_sigma={nucleoid_prominence_sigma:.1f}, "
                f"peak_fraction={nucleoid_peak_fraction:.2f}, "
-               f"min_voxels={min_nucleoid_voxels})")
+               f"min_voxels={min_nucleoid_voxels}, "
+               f"require_mito_overlap={require_mito_overlap})")
 
     # ---- Visualizations --------------------------------------------------
     central_z = z_slices // 2
@@ -1794,7 +1812,7 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
                    'threshold for the mito mask.')
 @click.option('--mito-dilation', default=3, type=int, show_default=True,
               help='Binary-dilation iterations applied to the mito mask.')
-@click.option('--mtdna-threshold-percentile', default=50, type=float, show_default=True,
+@click.option('--mtdna-threshold-percentile', default=90, type=float, show_default=True,
               help='PERMISSIVE background floor only: percentile of nonzero '
                    'mtDNA voxels that excludes genuine black background and '
                    'bounds the nucleoid watershed extent. It does NOT decide '
@@ -1812,7 +1830,7 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
 @click.option('--punct-scan-radius', default=20, type=int, show_default=True,
               help='Radius (voxels) for the 3D radial intensity profile '
                    'around each mtDNA nucleoid centroid.')
-@click.option('--min-nucleoid-voxels', default=5, type=int, show_default=True,
+@click.option('--min-nucleoid-voxels', default=25, type=int, show_default=True,
               help='Drop a nucleoid whose final per-peak region is smaller '
                    'than this many voxels.')
 @click.option('--nucleoid-tophat-radius-nm', default=300.0, type=float,
@@ -1823,7 +1841,7 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
                    'survive while slowly varying background/illumination is '
                    'subtracted. Anisotropic footprint from the voxel sizes. '
                    'Set 0 to disable top-hat.')
-@click.option('--nucleoid-prominence-sigma', default=3.0, type=float,
+@click.option('--nucleoid-prominence-sigma', default=5.0, type=float,
               show_default=True,
               help='Prominence threshold for seed detection, in units of the '
                    'flattened-image noise level: a seed (h-maximum) is kept '
@@ -1839,18 +1857,26 @@ def _save_radial_profile_outputs_3d(per_image_dfs, output_dir, radius):
                    'maximum. This is RELATIVE to each nucleoid\'s own peak, '
                    'not a global threshold, so it shapes each nucleoid '
                    'independently. Lower it to grow every region.')
-@click.option('--nucleoid-min-separation-nm', default=150.0, type=float,
+@click.option('--nucleoid-min-separation-nm', default=3.0, type=float,
               show_default=True,
               help='Minimum physical separation (nm) between two nucleoid '
                    'seeds; closer seeds are consolidated (the brighter kept). '
-                   'Set near your effective resolution / expected nucleoid '
-                   'spacing; larger values merge more, smaller values split more.')
+                   'The default (3 nm, below one voxel) effectively disables '
+                   'consolidation — raise it (e.g. 150-500) toward your '
+                   'effective resolution / expected spacing to merge nearby '
+                   'seeds; larger values merge more.')
 @click.option('--nucleoid-smoothing-nm', default=50.0, type=float,
               show_default=True,
               help='Gaussian smoothing sigma (nm, physical) applied to the '
                    'mtDNA channel AFTER the top-hat and before prominence '
                    'detection, to suppress single-voxel noise peaks. Set to 0 '
                    'to disable.')
+@click.option('--require-mito-overlap/--no-require-mito-overlap', default=False,
+              show_default=True,
+              help='If set, drop any nucleoid whose region does not overlap the '
+                   'mito mask (keep only mtDNA puncta on/inside a '
+                   'mitochondrion). Overlap depends on --mito-threshold-'
+                   'percentile / --mito-dilation, which build that mask.')
 @click.option('--voxel-size-x-nm', default=25.0, type=float, show_default=True,
               help='Lateral pixel size in nm (X axis). Reported distances '
                    'are converted to microns using these voxel sizes.')
@@ -1879,6 +1905,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
          punct_scan_radius, min_nucleoid_voxels,
          nucleoid_tophat_radius_nm, nucleoid_prominence_sigma,
          nucleoid_peak_fraction, nucleoid_min_separation_nm, nucleoid_smoothing_nm,
+         require_mito_overlap,
          voxel_size_x_nm, voxel_size_y_nm, voxel_size_z_nm,
          save_channel_mrcs, save_analysis_png, save_histogram_png,
          save_per_nucleoid_png):
@@ -1917,7 +1944,8 @@ def main(input_dir, input_pattern, output_dir, run_name,
                f"prominence_sigma={nucleoid_prominence_sigma:.1f}, "
                f"peak_fraction={nucleoid_peak_fraction:.2f}, "
                f"min_separation={nucleoid_min_separation_nm:.0f} nm, "
-               f"smoothing={nucleoid_smoothing_nm:.0f} nm)")
+               f"smoothing={nucleoid_smoothing_nm:.0f} nm, "
+               f"require_mito_overlap={require_mito_overlap})")
     click.echo(f"  radial-scan mito mask: reuses the mito mask "
                f"(@{mito_threshold_percentile}%, dilation={mito_dilation})")
     click.echo(f"  voxel size: x={voxel_size_x_nm:.1f} nm, "
@@ -1948,6 +1976,7 @@ def main(input_dir, input_pattern, output_dir, run_name,
                 nucleoid_peak_fraction=nucleoid_peak_fraction,
                 nucleoid_min_separation_nm=nucleoid_min_separation_nm,
                 nucleoid_smoothing_nm=nucleoid_smoothing_nm,
+                require_mito_overlap=require_mito_overlap,
                 voxel_size_x_nm=voxel_size_x_nm,
                 voxel_size_y_nm=voxel_size_y_nm,
                 voxel_size_z_nm=voxel_size_z_nm,

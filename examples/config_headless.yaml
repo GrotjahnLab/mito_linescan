@@ -37,16 +37,17 @@ sted_colocalization_3d:
   protein_channel: 2
   mito_threshold_percentile: 30
   mito_dilation: 3
-  mtdna_threshold_percentile: 50
+  mtdna_threshold_percentile: 90
   mtdna_dilation: 0
   septin_threshold_percentile: 95
   punct_scan_radius: 20
-  min_nucleoid_voxels: 5
+  min_nucleoid_voxels: 25
   nucleoid_tophat_radius_nm: 300
-  nucleoid_prominence_sigma: 3.0
+  nucleoid_prominence_sigma: 5.0
   nucleoid_peak_fraction: 0.30
-  nucleoid_min_separation_nm: 150
+  nucleoid_min_separation_nm: 3
   nucleoid_smoothing_nm: 50
+  require_mito_overlap: false
   save_channel_mrcs: false
   save_analysis_png: true
   save_histogram_png: true
