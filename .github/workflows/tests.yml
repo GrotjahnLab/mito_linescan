@@ -1,0 +1,38 @@
+name: Tests
+
+# The job that actually executes code — complements the LLM PR-review bots
+# (claude-code-review.yml, claude.yml), which review but do not run anything.
+
+on:
+  push:
+    branches: [main, verify-review-2]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    env:
+      MPLBACKEND: Agg  # headless matplotlib for the workflow imports/tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # Runs before any install (stdlib only) so DEP-2-class manifest drift
+      # fails fast, before we even try to build the environment.
+      - name: Manifest drift check (environment.yml vs setup.py)
+        run: python scripts/check_manifest.py
+
+      - name: Install package + test tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest ruff
+
+      - name: Ruff (error-catching rules)
+        run: ruff check .
+
+      - name: Pytest
+        run: pytest -q

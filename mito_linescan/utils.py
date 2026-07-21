@@ -44,6 +44,25 @@ def weighted_average_scan(image, x, y, radius):
         return 0.0
 
 
+def normalize_image(image):
+    """
+    Rescale an image array to the [0, 1] range using min-max normalization.
+
+    Args:
+        image: numpy array of image intensities
+
+    Returns:
+        Float array scaled to [0, 1]. If the image is constant, returns zeros.
+    """
+    image = image.astype(np.float64)
+    min_val = image.min()
+    max_val = image.max()
+    span = max_val - min_val
+    if span == 0:
+        return np.zeros_like(image)
+    return (image - min_val) / span
+
+
 def create_colormaps():
     """Create custom colormaps for mitochondria and scan visualization."""
     # Mitochondria colormap

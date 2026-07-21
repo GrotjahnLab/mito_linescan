@@ -7,8 +7,6 @@ draw_mask:
   manual_mask_directory: '/path/to/output/directory'  # Output directory for manually drawn masks (optional, defaults to input directory)
   mito_channel: 0  # Channel index for mitochondria (0-based)
   target_channel: 1  # Channel index for target/scan signal (0-based)
-  scan_width: 7  # Width of scan lines in pixels
-  sampling_radius: 3  # Radius for weighted average sampling in pixels
 
 # Mask refine: Refine mask edges using intensity information
 refine_mask:
@@ -38,7 +36,6 @@ network_line_scan:
   run_name: 'run1'  # Run name suffix for output directories
   mito_channel: 0  # 0-based index for mitochondria channel
   protein_channel: 2  # 0-based index for protein channel
-  use_gui: true  # Use interactive GUI for mask selection
   scan_width: 4  # Pixels on each side of the path for scanning
   path_sampling: 5  # Number of subpixel samples along the normal
   min_path_length: 30  # Minimum path length to process
@@ -134,29 +131,39 @@ sted_colocalization_3d:
   # 3D mito mask: threshold at Pth percentile of nonzero mito voxels + dilate
   mito_threshold_percentile: 30
   mito_dilation: 3
-  # mtDNA mask + Area1 dilation
-  mtdna_threshold_percentile: 99
-  mtdna_dilation: 3
+  # mtDNA PERMISSIVE background floor (+ Area1 dilation): only excludes black
+  # background and bounds the nucleoid watershed extent; does NOT decide which
+  # puncta exist (the prominence detector does). 0 = keep every non-zero voxel.
+  mtdna_threshold_percentile: 90
+  mtdna_dilation: 0
   # Septin mask threshold (used for stats reporting)
   septin_threshold_percentile: 95
   # 3D radial intensity profile around mtDNA nucleoid centroids
   punct_scan_radius: 20                # Profile radius (voxels, isotropic)
-  min_nucleoid_voxels: 5               # Drop tiny mtDNA components/basins
-  # Spatial splitting of merged mtDNA punctae: within each connected component,
-  # detect local intensity maxima (anisotropy-aware) and seed a watershed so
-  # two nucleoids fused into one blob are counted as separate nucleoids.
-  split_nucleoids: true                # false = one centroid per component
-  nucleoid_min_separation_nm: 150      # Min physical separation between two
-                                       # maxima; set near effective resolution
-                                       # / expected spacing. Larger merges
-                                       # more, smaller splits more.
-  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) applied before
-                                       # maxima detection; 0 disables.
-  # Scan-time mito mask: only voxels INSIDE this mask are averaged into the
-  # radial profile (so "intensity vs distance" reflects mito interior only).
-  # Independent of mito_threshold_percentile above, which drives Area1/Area2.
-  radial_scan_mito_threshold_percentile: 99
-  radial_scan_mito_dilation: 3
+  min_nucleoid_voxels: 25              # Drop a nucleoid whose per-peak region
+                                       # is smaller than this many voxels
+  # Nucleoid detection = white top-hat (background flatten) -> prominence
+  # h-maxima seeds -> seeded watershed -> per-peak region. A seed survives only
+  # if it rises >= prominence_sigma * noise above its surroundings (dim and
+  # bright puncta treated the same).
+  nucleoid_tophat_radius_nm: 300       # Top-hat SE radius (a bit > a nucleoid);
+                                       # 0 disables background flatten
+  nucleoid_prominence_sigma: 5.0       # Seed prominence in robust-sigma units;
+                                       # lower detects more (eventually noise)
+  nucleoid_peak_fraction: 0.30         # Per-nucleoid cutoff relative to each
+                                       # basin's own peak; lower grows regions
+  nucleoid_min_separation_nm: 3        # Consolidate seeds closer than this; 3 nm
+                                       # (< 1 voxel) is effectively off — raise
+                                       # to 150-500 to merge nearby seeds
+  nucleoid_smoothing_nm: 50            # Gaussian sigma (nm) after top-hat,
+                                       # before prominence detection; 0 disables
+  require_mito_overlap: false          # true = drop nucleoids that don't overlap
+  exclude_border_nucleoids: true
+                                       # the mito mask (mtDNA on/inside mito only)
+  # The radial profile averages only voxels INSIDE the mito mask, and the mito
+  # outline drawn on the per-nucleoid figures is that same mask. Both reuse the
+  # single mito mask thresholded at `mito_threshold_percentile` (+ mito_dilation)
+  # above — the mito signal is thresholded exactly once.
   # Voxel sizes in NANOMETERS. The radial profile uses the true anisotropic
   # Euclidean distance and reports the distance axis (CSV column
   # `distance_um`, plot x-axis) in MICRONS. Defaults are typical for 3D

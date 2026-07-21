@@ -154,10 +154,10 @@ def _build_mito_binary(
 
     if use_gui:
         from mito_linescan.mito_protein_line_scanner import select_mask_gui
-        _, mito_binary, _, _ = select_mask_gui(mito_img_eq, **pipeline_kwargs)
+        _, mito_binary, _, _, _ = select_mask_gui(mito_img_eq, **pipeline_kwargs)
     else:
         from mito_linescan.mito_protein_line_scanner import compute_mito_mask_noninteractive
-        _, mito_binary, _, _ = compute_mito_mask_noninteractive(
+        _, mito_binary, _, _, _ = compute_mito_mask_noninteractive(
             mito_img_eq, **pipeline_kwargs
         )
 

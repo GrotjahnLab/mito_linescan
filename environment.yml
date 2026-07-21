@@ -17,4 +17,5 @@ dependencies:
     - sknw
     - tifffile
     - localthickness
+    - mrcfile
     - -e .

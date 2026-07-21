@@ -1,0 +1,71 @@
+# Headless (use_gui: false) config for the four non-interactive workflows,
+# wired to the bundled examples/ data. Run each workflow from the repo root:
+#   mito_protein_localization network_line_scan          --config examples/config_headless.yaml
+#   mito_protein_localization sted_colocalization_3d     --config examples/config_headless.yaml
+#   mito_protein_localization plot_peak_distance_analysis --config examples/config_headless.yaml
+#   mito_protein_localization analyze_omm_scans          --config examples/config_headless.yaml
+# Outputs land in .phase1_smoke_out/ (git-ignored scratch).
+
+network_line_scan:
+  input_dir: 'examples/representative_cells'
+  input_pattern: '*.tif'
+  mask_dir_output: '.phase1_smoke_out/nls_masks'
+  mask_dir_input: 'examples/representative_cells/masks/'
+  run_name: 'smoke'
+  mito_channel: 0
+  protein_channel: 2
+  mask_channel: null
+  scan_width: 4
+  path_sampling: 5
+  min_path_length: 30
+  tubule_radius: 2.0
+  sensitivity: 1.0
+  min_object_size: 30
+  gap_closing: 1
+  use_thickness_filter: false
+  min_thickness: 1.0
+  max_thickness: 20.0
+  binary_mask_dir_output: ''
+
+sted_colocalization_3d:
+  input_dir: 'examples/SEPT9_REPRESENTATIVE'
+  input_pattern: '*_3D_frame01.tif'
+  output_dir: '.phase1_smoke_out/sted'
+  run_name: 'smoke'
+  mtdna_channel: 0
+  mito_channel: 1
+  protein_channel: 2
+  mito_threshold_percentile: 30
+  mito_dilation: 3
+  mtdna_threshold_percentile: 90
+  mtdna_dilation: 0
+  septin_threshold_percentile: 95
+  punct_scan_radius: 20
+  min_nucleoid_voxels: 25
+  nucleoid_tophat_radius_nm: 300
+  nucleoid_prominence_sigma: 5.0
+  nucleoid_peak_fraction: 0.30
+  nucleoid_min_separation_nm: 3
+  nucleoid_smoothing_nm: 50
+  require_mito_overlap: false
+  exclude_border_nucleoids: true
+  save_channel_mrcs: false
+  save_analysis_png: true
+  save_histogram_png: true
+
+plot_peak_distance_analysis:
+  csv_directory: 'examples/representative_cells'
+  input_pattern: '*_mito_*.csv'
+  output_directory: '.phase1_smoke_out/ppda'
+  peak_min_intensity: 0.3
+  peak_min_prominence: 0.1
+  peak_prominence_wlen: 10
+  bin_width: 5.0
+  max_distance: 0.0
+  recursive: true
+
+analyze_omm_scans:
+  input_directory: 'examples/SEPT9_REPRESENTATIVE/output'
+  output_directory: '.phase1_smoke_out/omm'
+  peak_threshold: 0.3
+  peak_prominence: 0.1
