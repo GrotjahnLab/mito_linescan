@@ -269,6 +269,79 @@ def atomic_write_csv(df, path):
     os.replace(tmp, path)
 
 
+# --- scoring against a ground-truth sheet --------------------------------
+
+# Column names in the ground-truth sheet, with positional fallbacks.
+GT_KEY_COL = "BLINDED"
+GT_VALUE_COL = "Ground_Truth"
+
+
+def load_ground_truth(path):
+    """Load a ground-truth sheet into ``{stem: TRUE_CALL}`` (calls uppercased).
+
+    The separator is auto-detected (the example sheet is tab-separated). Uses
+    the ``BLINDED`` / ``Ground_Truth`` columns when present, otherwise the
+    first column as the key and the last as the truth value.
+    """
+    df = pd.read_csv(path, sep=None, engine="python", dtype=str).fillna("")
+    cols = list(df.columns)
+    key_col = GT_KEY_COL if GT_KEY_COL in cols else cols[0]
+    val_col = GT_VALUE_COL if GT_VALUE_COL in cols else cols[-1]
+    truth = {}
+    for k, v in zip(df[key_col], df[val_col]):
+        stem = str(k).strip()
+        if stem:
+            truth[stem] = str(v).strip().upper()
+    return truth
+
+
+def score_against_truth(records, truth):
+    """Compare a reviewer's calls to ground truth.
+
+    Only images that were scored *and* appear in ``truth`` are counted. An
+    ``IDK`` never matches a WT/KO truth, so it counts as incorrect (but is also
+    tallied separately). Returns a dict with ``n_compared``, ``n_correct``,
+    ``n_idk`` and ``accuracy`` (percent, 0.0 when nothing is comparable).
+    """
+    n_compared = n_correct = n_idk = 0
+    for r in records:
+        stem = r["FILE"]
+        if stem not in truth:
+            continue
+        call = str(r["call"]).strip().upper()
+        n_compared += 1
+        if call == "IDK":
+            n_idk += 1
+        if call == truth[stem]:
+            n_correct += 1
+    accuracy = (100.0 * n_correct / n_compared) if n_compared else 0.0
+    return {
+        "n_compared": n_compared,
+        "n_correct": n_correct,
+        "n_idk": n_idk,
+        "accuracy": accuracy,
+    }
+
+
+def funny_verdict(accuracy):
+    """Map an accuracy percentage to a (message, mood) pair.
+
+    ``mood`` is one of ``"happy"``, ``"meh"``, ``"sad"`` and drives the face
+    drawn in the results window.
+    """
+    if accuracy >= 100:
+        return ("Flawless. The microscope works for YOU now.", "happy")
+    if accuracy >= 90:
+        return ("Basically a WT/KO oracle. Spooky good.", "happy")
+    if accuracy >= 75:
+        return ("Solid work - your PhD is safe today.", "happy")
+    if accuracy >= 50:
+        return ("You beat a coin flip. Barely. Pop the cheap champagne.", "meh")
+    if accuracy > 0:
+        return ("The blinding worked a little TOO well...", "sad")
+    return ("Did you review the images or your screensaver?", "sad")
+
+
 # =========================================================================
 # GUI shell (thin wrapper over the pure functions above)
 # =========================================================================
@@ -399,6 +472,63 @@ def run_gui(files, reviewer, p_low, p_high, on_record):
         plt.show(block=True)
 
 
+def _draw_face(ax, mood):
+    """Draw a simple score-dependent emoji face on ``ax`` (0..1 coords)."""
+    from matplotlib.patches import Arc, Circle
+
+    ax.add_patch(Circle((0.5, 0.50), 0.30, facecolor="#ffd54a",
+                         edgecolor="#c79a00", linewidth=3, zorder=1))
+    for ex in (0.39, 0.61):
+        ax.add_patch(Circle((ex, 0.60), 0.042, facecolor="#333", zorder=2))
+    if mood == "happy":
+        # Smile: bottom arc of an ellipse.
+        ax.add_patch(Arc((0.5, 0.43), 0.30, 0.24, theta1=200, theta2=340,
+                         linewidth=4, edgecolor="#333", zorder=2))
+    elif mood == "sad":
+        # Frown: top arc, placed low so it curves downward.
+        ax.add_patch(Arc((0.5, 0.34), 0.30, 0.24, theta1=20, theta2=160,
+                         linewidth=4, edgecolor="#333", zorder=2))
+    else:  # meh: straight mouth
+        ax.plot([0.38, 0.62], [0.40, 0.40], color="#333", linewidth=4, zorder=2)
+
+
+def show_results_gui(result, reviewer):
+    """Pop up a final window with accuracy, a face, and a funny message."""
+    import matplotlib.pyplot as plt
+
+    acc = result["accuracy"]
+    message, mood = funny_verdict(acc)
+    bg = {"happy": "#e8f5e9", "meh": "#fffde7", "sad": "#ffebee"}[mood]
+
+    fig = plt.figure(figsize=(6, 6))
+    fig.patch.set_facecolor(bg)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
+    ax.set_facecolor(bg)
+
+    ax.text(0.5, 0.95, f"{reviewer}", ha="center", va="top",
+            fontsize=14, color="#555")
+    ax.text(0.5, 0.88, f"{acc:.0f}% correct", ha="center", va="top",
+            fontsize=34, fontweight="bold", color="#222")
+
+    _draw_face(ax, mood)
+
+    ax.text(0.5, 0.16, message, ha="center", va="center", fontsize=15,
+            fontstyle="italic", color="#333", wrap=True)
+    ax.text(0.5, 0.06,
+            f"{result['n_correct']} / {result['n_compared']} correct"
+            + (f"   ({result['n_idk']} IDK)" if result["n_idk"] else ""),
+            ha="center", va="center", fontsize=12, color="#666")
+
+    try:
+        fig.canvas.manager.set_window_title("Blind review - results")
+    except Exception:
+        pass
+    plt.show(block=True)
+
+
 # =========================================================================
 # CLI
 # =========================================================================
@@ -428,12 +558,16 @@ def run_gui(files, reviewer, p_low, p_high, on_record):
               help="Append master-sheet rows for input files not already listed.")
 @click.option("--overwrite-column", is_flag=True, default=False,
               help="Overwrite an existing reviewer column in the master sheet.")
+@click.option("--ground-truth", default="", type=str,
+              help="CSV of true genotypes (columns BLINDED, Ground_Truth). If "
+                   "given, a results window pops up at the end with your "
+                   "accuracy and a suitably encouraging message.")
 @click.option("--dry-run", is_flag=True, default=False,
               help="Exercise discovery + merge with stub 'IDK' calls, no GUI. "
                    "Useful for headless smoke testing.")
 def main(input_directory, reviewer, genotype_csv, output_directory, seed,
          input_pattern, p_low, p_high, allow_new_rows, overwrite_column,
-         dry_run):
+         ground_truth, dry_run):
     """Blindly score TIFFs as WT / KO / IDK and record the calls.
 
     This utility is standalone and is not part of the analysis pipeline.
@@ -526,6 +660,25 @@ def main(input_directory, reviewer, genotype_csv, output_directory, seed,
 
     atomic_write_csv(results, results_csv)
     click.echo(f"Wrote {results_csv}")
+
+    if ground_truth:
+        if not os.path.exists(ground_truth):
+            raise click.ClickException(
+                f"Ground-truth file not found: {ground_truth}")
+        truth = load_ground_truth(ground_truth)
+        result = score_against_truth(records, truth)
+        message, _mood = funny_verdict(result["accuracy"])
+        click.echo(
+            f"Accuracy vs ground truth: {result['accuracy']:.1f}% "
+            f"({result['n_correct']}/{result['n_compared']} correct"
+            + (f", {result['n_idk']} IDK" if result["n_idk"] else "")
+            + f") - {message}"
+        )
+        if result["n_compared"] == 0:
+            click.echo("No scored images overlap the ground-truth sheet; "
+                       "skipping the results window.")
+        elif not dry_run:
+            show_results_gui(result, reviewer)
 
 
 def _merge_into_master(genotype_csv, records, reviewer,

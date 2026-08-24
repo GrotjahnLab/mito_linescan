@@ -52,7 +52,30 @@ keyboard shortcut; the tool advances automatically.
 | `--p-high FLOAT` | no | Upper percentile for auto-contrast `vmax` (default `99.5`). |
 | `--allow-new-rows` | no | Append master-sheet rows for input files not already listed. |
 | `--overwrite-column` | no | Overwrite an existing reviewer column instead of erroring. |
+| `--ground-truth PATH` | no | CSV of true genotypes (`BLINDED`, `Ground_Truth` columns). Pops up a results window at the end with the reviewer's accuracy. |
 | `--dry-run` | no | Score nothing (stub every image as `IDK`), no GUI. Exercises discovery + merge for headless smoke testing. |
+
+## Ground-truth scoring
+
+If `--ground-truth PATH` is given, after scoring the tool compares the
+reviewer's calls to the truth sheet and, at the very end, pops up a results
+window showing the **percent accuracy**, a score-dependent cartoon face, and a
+(hopefully) funny message. The accuracy is also printed to the terminal.
+
+- The sheet is auto-delimited (the example is tab-separated) and uses the
+  `BLINDED` (stem) and `Ground_Truth` (call) columns, falling back to the first
+  and last columns if those names are absent.
+- Only images that were **scored and present in the truth sheet** are counted.
+- An `IDK` never matches a WT/KO truth, so it counts as incorrect (but is also
+  tallied separately in the printed summary).
+- With `--dry-run`, accuracy is computed and printed but no window opens.
+
+```bash
+mito_blind_review \
+  --input-directory example_blindreview/blinded_mitos \
+  --reviewer "Jane Doe" \
+  --ground-truth example_blindreview/Ground_Truth.csv
+```
 
 ## Controls
 

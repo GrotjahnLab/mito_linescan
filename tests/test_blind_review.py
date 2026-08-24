@@ -214,6 +214,75 @@ def test_build_reviewer_results_empty():
     assert len(df) == 0
 
 
+# --- ground-truth scoring ------------------------------------------------
+
+def test_load_ground_truth_tab_separated(tmp_path):
+    p = tmp_path / "gt.csv"
+    p.write_text("BLINDED\tGround_Truth\nS9MEF_01\tWT\nS9MEF_02\tko\n")
+    truth = br.load_ground_truth(str(p))
+    assert truth == {"S9MEF_01": "WT", "S9MEF_02": "KO"}  # uppercased
+
+
+def test_load_ground_truth_positional_fallback(tmp_path):
+    p = tmp_path / "gt.csv"
+    p.write_text("stem,truth\nS9MEF_01,WT\nS9MEF_02,KO\n")
+    truth = br.load_ground_truth(str(p))
+    assert truth == {"S9MEF_01": "WT", "S9MEF_02": "KO"}
+
+
+def _rec(stem, call):
+    return {"FILE": stem, "call": call}
+
+
+def test_score_against_truth_basic():
+    records = [_rec("A", "WT"), _rec("B", "KO"), _rec("C", "WT")]
+    truth = {"A": "WT", "B": "WT", "C": "WT"}
+    res = br.score_against_truth(records, truth)
+    assert res["n_compared"] == 3
+    assert res["n_correct"] == 2  # A, C right; B wrong
+    assert res["accuracy"] == pytest.approx(200.0 / 3)
+
+
+def test_score_ignores_files_absent_from_truth():
+    records = [_rec("A", "WT"), _rec("Z", "KO")]
+    truth = {"A": "WT"}
+    res = br.score_against_truth(records, truth)
+    assert res["n_compared"] == 1
+    assert res["n_correct"] == 1
+    assert res["accuracy"] == 100.0
+
+
+def test_score_idk_counts_as_incorrect():
+    records = [_rec("A", "IDK"), _rec("B", "KO")]
+    truth = {"A": "WT", "B": "KO"}
+    res = br.score_against_truth(records, truth)
+    assert res["n_compared"] == 2
+    assert res["n_idk"] == 1
+    assert res["n_correct"] == 1  # only B
+    assert res["accuracy"] == 50.0
+
+
+def test_score_no_overlap_is_zero():
+    res = br.score_against_truth([_rec("X", "WT")], {"A": "WT"})
+    assert res["n_compared"] == 0
+    assert res["accuracy"] == 0.0
+
+
+def test_score_call_case_insensitive():
+    res = br.score_against_truth([_rec("A", "wt")], {"A": "WT"})
+    assert res["n_correct"] == 1
+
+
+@pytest.mark.parametrize("acc,mood", [
+    (100.0, "happy"), (95.0, "happy"), (80.0, "happy"),
+    (60.0, "meh"), (30.0, "sad"), (0.0, "sad"),
+])
+def test_funny_verdict_moods(acc, mood):
+    message, got_mood = br.funny_verdict(acc)
+    assert got_mood == mood
+    assert isinstance(message, str) and message
+
+
 # --- discovery -----------------------------------------------------------
 
 def test_discover_tiffs_sorted(tmp_path):
