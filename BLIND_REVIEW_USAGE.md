@@ -87,7 +87,7 @@ Only one 2D plane is ever displayed:
 
 - **2D `(Y, X)`** — shown as-is.
 - **3D** — the smallest axis is inspected. If its length is `<= 4` it is treated
-  as a channel axis and the **first** channel is shown (handles both `(C, Y, X)`
+  as a channel axis and the **last** channel is shown (handles both `(C, Y, X)`
   and `(Y, X, C)`). Otherwise the array is treated as a **z-series** and a
   **max-intensity projection** along the leading axis is shown.
 

@@ -21,7 +21,7 @@ Channel / z-stack rule (see ``select_review_plane``)
 ----------------------------------------------------
 Only one 2D plane is ever shown. For a 3D array we look at the smallest axis:
 if it is no larger than ``CHANNEL_MAX_SIZE`` we treat that axis as channels and
-take the **first** channel; otherwise the array is treated as a z-series and we
+take the **last** channel; otherwise the array is treated as a z-series and we
 take a **max-intensity projection** along the leading axis. 2D arrays are used
 as-is. This mirrors the small-leading-dim guard used in
 ``mask_thickness_util._extract_mask`` but generalizes it to either axis order.
@@ -88,16 +88,18 @@ def file_stem(path):
     return stem
 
 
-def select_review_plane(arr, channel=0, channel_max=CHANNEL_MAX_SIZE):
+def select_review_plane(arr, channel=-1, channel_max=CHANNEL_MAX_SIZE):
     """Reduce an input array to the single 2D plane to display.
 
     See the module docstring for the full rule. Returns a 2D ``numpy`` array.
 
     - 2D ``(Y, X)``: returned unchanged.
     - 3D: the smallest axis is inspected. If its length ``<= channel_max`` that
-      axis is treated as channels and channel ``channel`` (default the first)
-      is taken. Otherwise the array is a z-series and a max-intensity
-      projection along the leading axis is returned.
+      axis is treated as channels and channel ``channel`` is taken. ``channel``
+      defaults to ``-1`` (the **last** channel) and supports negative indexing;
+      out-of-range values are clamped to the valid range. Otherwise the array
+      is a z-series and a max-intensity projection along the leading axis is
+      returned.
     - Anything else raises ``ValueError``.
     """
     arr = np.asarray(arr)
@@ -105,8 +107,10 @@ def select_review_plane(arr, channel=0, channel_max=CHANNEL_MAX_SIZE):
         return arr
     if arr.ndim == 3:
         ch_axis = int(np.argmin(arr.shape))
-        if arr.shape[ch_axis] <= channel_max:
-            idx = min(channel, arr.shape[ch_axis] - 1)
+        n = arr.shape[ch_axis]
+        if n <= channel_max:
+            # Negative indices count from the end (channel=-1 -> last channel).
+            idx = max(channel, -n) if channel < 0 else min(channel, n - 1)
             return np.take(arr, idx, axis=ch_axis)
         # z-series: collapse the leading (z) axis with a max projection.
         return arr.max(axis=0)
@@ -269,8 +273,8 @@ def atomic_write_csv(df, path):
 # GUI shell (thin wrapper over the pure functions above)
 # =========================================================================
 
-def _load_plane(path, channel=0):
-    """Read a TIFF and reduce it to the 2D display plane."""
+def _load_plane(path, channel=-1):
+    """Read a TIFF and reduce it to the 2D display plane (last channel)."""
     arr = tf.imread(path)
     return select_review_plane(arr, channel=channel)
 

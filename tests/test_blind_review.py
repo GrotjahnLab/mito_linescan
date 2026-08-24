@@ -52,24 +52,35 @@ def test_plane_2d_unchanged():
     assert np.array_equal(out, img)
 
 
-def test_plane_channel_first():
-    # (C, Y, X) with 2 channels — smallest axis is 0.
+def test_plane_channel_first_axis_default_last():
+    # (C, Y, X) with 2 channels — smallest axis is 0; default is the last channel.
     arr = np.zeros((2, 30, 40))
     arr[0] = 1.0
     arr[1] = 2.0
-    out = br.select_review_plane(arr, channel=0)
+    out = br.select_review_plane(arr)
     assert out.shape == (30, 40)
-    assert np.all(out == 1.0)  # first channel
+    assert np.all(out == 2.0)  # last channel by default
 
 
-def test_plane_channel_last():
-    # (Y, X, C) with 2 channels — smallest axis is 2.
+def test_plane_channel_last_axis_default_last():
+    # (Y, X, C) with 2 channels — smallest axis is 2; default is the last channel.
     arr = np.zeros((30, 40, 2))
     arr[..., 0] = 5.0
     arr[..., 1] = 9.0
-    out = br.select_review_plane(arr, channel=0)
+    out = br.select_review_plane(arr)
     assert out.shape == (30, 40)
-    assert np.all(out == 5.0)
+    assert np.all(out == 9.0)  # last channel by default
+
+
+def test_plane_explicit_channel_index():
+    # Explicit non-default index still works and is clamped when out of range.
+    arr = np.zeros((3, 10, 10))
+    arr[0] = 1.0
+    arr[1] = 2.0
+    arr[2] = 3.0
+    assert np.all(br.select_review_plane(arr, channel=0) == 1.0)
+    assert np.all(br.select_review_plane(arr, channel=1) == 2.0)
+    assert np.all(br.select_review_plane(arr, channel=99) == 3.0)  # clamped to last
 
 
 def test_plane_zstack_max_projection():
