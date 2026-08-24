@@ -657,8 +657,20 @@ data/
 - **Output**: CSV, PNG, pickle
 - **Config**: YAML (`.yaml`, `.yml`)
 
+## Blind review utility
+
+`mito_blind_review` is a **standalone** tool for blindly scoring images as `WT`,
+`KO`, or `IDK`, one grayscale image at a time in a per-reviewer randomized
+order. It exists in this repo only so the manual scoring procedure is documented
+and reproducible for reviewers.
+
+**It is not part of the analysis pipeline** — no pipeline module imports it, and
+it imports nothing from the pipeline. See
+[BLIND_REVIEW_USAGE.md](BLIND_REVIEW_USAGE.md) for full documentation.
+
 ## Related Documentation
 
 - [CLI_USAGE.md](CLI_USAGE.md) - Direct command-line script usage
 - [MITO_LOCATION_USAGE.md](MITO_LOCATION_USAGE.md) - Config-based workflow documentation
+- [BLIND_REVIEW_USAGE.md](BLIND_REVIEW_USAGE.md) - Standalone blind genotype review utility (not part of the pipeline)
 - `config.yaml.template` - Complete configuration file template with explanations

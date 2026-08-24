@@ -14,6 +14,7 @@ setup(
             "mito_protein_line_scanner=mito_linescan.mito_protein_line_scanner:main",
             "mito_protein_omm_normal_scanner=mito_linescan.mito_protein_omm_normal_scanner:main",
             "mask_thickness=mito_linescan.mask_thickness_util:main",
+            "mito_blind_review=mito_linescan.blind_review:main",
         ],
     },
     install_requires=[
