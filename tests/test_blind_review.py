@@ -142,26 +142,26 @@ def _master(stems):
 
 def test_merge_adds_column_joined_on_stem():
     master = _master(["S9MEF_01", "S9MEF_02", "S9MEF_03"])
-    calls = {"S9MEF_01": "WT", "S9MEF_03": "KO"}
+    calls = {"S9MEF_01": "MorphologyA", "S9MEF_03": "MorphologyB"}
     merged, extras = br.merge_calls_into_master(master, calls, "alice")
     assert list(merged.columns) == ["FILE", "alice"]  # appended at right
-    assert merged.loc[merged.FILE == "S9MEF_01", "alice"].item() == "WT"
-    assert merged.loc[merged.FILE == "S9MEF_03", "alice"].item() == "KO"
+    assert merged.loc[merged.FILE == "S9MEF_01", "alice"].item() == "MorphologyA"
+    assert merged.loc[merged.FILE == "S9MEF_03", "alice"].item() == "MorphologyB"
     # unscored row -> empty
     assert merged.loc[merged.FILE == "S9MEF_02", "alice"].item() == ""
     assert extras == []
 
 
 def test_merge_preserves_existing_column_order():
-    master = pd.DataFrame({"FILE": ["S9MEF_01"], "bob": ["WT"], "note": ["x"]})
-    calls = {"S9MEF_01": "KO"}
+    master = pd.DataFrame({"FILE": ["S9MEF_01"], "bob": ["MorphologyA"], "note": ["x"]})
+    calls = {"S9MEF_01": "MorphologyB"}
     merged, _ = br.merge_calls_into_master(master, calls, "alice")
     assert list(merged.columns) == ["FILE", "bob", "note", "alice"]
 
 
 def test_merge_extra_files_warned_not_added_by_default():
     master = _master(["S9MEF_01"])
-    calls = {"S9MEF_01": "WT", "S9MEF_99": "KO"}
+    calls = {"S9MEF_01": "MorphologyA", "S9MEF_99": "MorphologyB"}
     merged, extras = br.merge_calls_into_master(master, calls, "alice")
     assert extras == ["S9MEF_99"]
     assert "S9MEF_99" not in set(merged.FILE)
@@ -169,25 +169,25 @@ def test_merge_extra_files_warned_not_added_by_default():
 
 def test_merge_extra_files_added_with_flag():
     master = _master(["S9MEF_01"])
-    calls = {"S9MEF_01": "WT", "S9MEF_99": "KO"}
+    calls = {"S9MEF_01": "MorphologyA", "S9MEF_99": "MorphologyB"}
     merged, extras = br.merge_calls_into_master(
         master, calls, "alice", allow_new_rows=True)
     assert extras == ["S9MEF_99"]
     assert "S9MEF_99" in set(merged.FILE)
-    assert merged.loc[merged.FILE == "S9MEF_99", "alice"].item() == "KO"
+    assert merged.loc[merged.FILE == "S9MEF_99", "alice"].item() == "MorphologyB"
 
 
 def test_merge_existing_column_raises_without_overwrite():
-    master = pd.DataFrame({"FILE": ["S9MEF_01"], "alice": ["WT"]})
+    master = pd.DataFrame({"FILE": ["S9MEF_01"], "alice": ["MorphologyA"]})
     with pytest.raises(ValueError):
-        br.merge_calls_into_master(master, {"S9MEF_01": "KO"}, "alice")
+        br.merge_calls_into_master(master, {"S9MEF_01": "MorphologyB"}, "alice")
 
 
 def test_merge_existing_column_overwrites_with_flag():
-    master = pd.DataFrame({"FILE": ["S9MEF_01"], "alice": ["WT"]})
+    master = pd.DataFrame({"FILE": ["S9MEF_01"], "alice": ["MorphologyA"]})
     merged, _ = br.merge_calls_into_master(
-        master, {"S9MEF_01": "KO"}, "alice", overwrite_column=True)
-    assert merged.loc[merged.FILE == "S9MEF_01", "alice"].item() == "KO"
+        master, {"S9MEF_01": "MorphologyB"}, "alice", overwrite_column=True)
+    assert merged.loc[merged.FILE == "S9MEF_01", "alice"].item() == "MorphologyB"
 
 
 def test_merge_missing_file_column_raises():
@@ -199,13 +199,13 @@ def test_merge_missing_file_column_raises():
 
 def test_build_reviewer_results():
     records = [
-        {"FILE": "S9MEF_01", "call": "WT"},
-        {"FILE": "S9MEF_02", "call": "KO"},
+        {"FILE": "S9MEF_01", "call": "MorphologyA"},
+        {"FILE": "S9MEF_02", "call": "MorphologyB"},
     ]
     df = br.build_reviewer_results(records, "Jane Doe")
     assert list(df.columns) == ["FILE", "Jane Doe"]
-    assert df.loc[df.FILE == "S9MEF_01", "Jane Doe"].item() == "WT"
-    assert df.loc[df.FILE == "S9MEF_02", "Jane Doe"].item() == "KO"
+    assert df.loc[df.FILE == "S9MEF_01", "Jane Doe"].item() == "MorphologyA"
+    assert df.loc[df.FILE == "S9MEF_02", "Jane Doe"].item() == "MorphologyB"
 
 
 def test_build_reviewer_results_empty():
@@ -217,17 +217,33 @@ def test_build_reviewer_results_empty():
 # --- ground-truth scoring ------------------------------------------------
 
 def test_load_ground_truth_tab_separated(tmp_path):
+    # New-style labels pass through unchanged; separator is auto-detected.
     p = tmp_path / "gt.csv"
-    p.write_text("BLINDED\tGround_Truth\nS9MEF_01\tWT\nS9MEF_02\tko\n")
+    p.write_text("BLINDED\tGround_Truth\nS9MEF_01\tMorphologyA\nS9MEF_02\tMorphologyB\n")
     truth = br.load_ground_truth(str(p))
-    assert truth == {"S9MEF_01": "WT", "S9MEF_02": "KO"}  # uppercased
+    assert truth == {"S9MEF_01": "MorphologyA", "S9MEF_02": "MorphologyB"}
 
 
 def test_load_ground_truth_positional_fallback(tmp_path):
     p = tmp_path / "gt.csv"
-    p.write_text("stem,truth\nS9MEF_01,WT\nS9MEF_02,KO\n")
+    p.write_text("stem,truth\nS9MEF_01,MorphologyA\nS9MEF_02,MorphologyB\n")
     truth = br.load_ground_truth(str(p))
-    assert truth == {"S9MEF_01": "WT", "S9MEF_02": "KO"}
+    assert truth == {"S9MEF_01": "MorphologyA", "S9MEF_02": "MorphologyB"}
+
+
+def test_load_ground_truth_legacy_wt_ko_aliased(tmp_path):
+    # Legacy WT/KO sheets (any case) are mapped onto the morphology labels.
+    p = tmp_path / "gt.csv"
+    p.write_text("BLINDED\tGround_Truth\nS9MEF_01\tWT\nS9MEF_02\tko\n")
+    truth = br.load_ground_truth(str(p))
+    assert truth == {"S9MEF_01": "MorphologyA", "S9MEF_02": "MorphologyB"}
+
+
+def test_normalize_call_aliases():
+    assert br.normalize_call("WT") == "MorphologyA"
+    assert br.normalize_call("ko") == "MorphologyB"
+    assert br.normalize_call("MorphologyA") == "MorphologyA"
+    assert br.normalize_call("IDK") == "IDK"
 
 
 def _rec(stem, call):
@@ -235,8 +251,8 @@ def _rec(stem, call):
 
 
 def test_score_against_truth_basic():
-    records = [_rec("A", "WT"), _rec("B", "KO"), _rec("C", "WT")]
-    truth = {"A": "WT", "B": "WT", "C": "WT"}
+    records = [_rec("A", "MorphologyA"), _rec("B", "MorphologyB"), _rec("C", "MorphologyA")]
+    truth = {"A": "MorphologyA", "B": "MorphologyA", "C": "MorphologyA"}
     res = br.score_against_truth(records, truth)
     assert res["n_compared"] == 3
     assert res["n_correct"] == 2  # A, C right; B wrong
@@ -244,8 +260,8 @@ def test_score_against_truth_basic():
 
 
 def test_score_ignores_files_absent_from_truth():
-    records = [_rec("A", "WT"), _rec("Z", "KO")]
-    truth = {"A": "WT"}
+    records = [_rec("A", "MorphologyA"), _rec("Z", "MorphologyB")]
+    truth = {"A": "MorphologyA"}
     res = br.score_against_truth(records, truth)
     assert res["n_compared"] == 1
     assert res["n_correct"] == 1
@@ -253,8 +269,8 @@ def test_score_ignores_files_absent_from_truth():
 
 
 def test_score_idk_counts_as_incorrect():
-    records = [_rec("A", "IDK"), _rec("B", "KO")]
-    truth = {"A": "WT", "B": "KO"}
+    records = [_rec("A", "IDK"), _rec("B", "MorphologyB")]
+    truth = {"A": "MorphologyA", "B": "MorphologyB"}
     res = br.score_against_truth(records, truth)
     assert res["n_compared"] == 2
     assert res["n_idk"] == 1
@@ -263,13 +279,14 @@ def test_score_idk_counts_as_incorrect():
 
 
 def test_score_no_overlap_is_zero():
-    res = br.score_against_truth([_rec("X", "WT")], {"A": "WT"})
+    res = br.score_against_truth([_rec("X", "MorphologyA")], {"A": "MorphologyA"})
     assert res["n_compared"] == 0
     assert res["accuracy"] == 0.0
 
 
 def test_score_call_case_insensitive():
-    res = br.score_against_truth([_rec("A", "wt")], {"A": "WT"})
+    # Legacy lowercase "wt" call is aliased+matched against a MorphologyA truth.
+    res = br.score_against_truth([_rec("A", "wt")], {"A": "MorphologyA"})
     assert res["n_correct"] == 1
 
 

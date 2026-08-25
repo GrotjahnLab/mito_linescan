@@ -659,10 +659,10 @@ data/
 
 ## Blind review utility
 
-`mito_blind_review` is a **standalone** tool for blindly scoring images as `WT`,
-`KO`, or `IDK`, one grayscale image at a time in a per-reviewer randomized
-order. It exists in this repo only so the manual scoring procedure is documented
-and reproducible for reviewers.
+`mito_blind_review` is a **standalone** tool for blindly scoring images as
+`MorphologyA`, `MorphologyB`, or `IDK`, one grayscale image at a time in a
+per-reviewer randomized order. It exists in this repo only so the manual scoring
+procedure is documented and reproducible for reviewers.
 
 **It is not part of the analysis pipeline** — no pipeline module imports it, and
 it imports nothing from the pipeline. See

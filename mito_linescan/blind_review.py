@@ -8,7 +8,7 @@ the pipeline modules.
 
 A reviewer is shown one grayscale image at a time, in a per-reviewer
 randomized order, with the real filename hidden. For each image they call
-``WT``, ``KO`` or ``IDK`` (by button or keyboard). Calls are written to a
+``MorphologyA``, ``MorphologyB`` or ``IDK`` (by button or keyboard). Calls are written to a
 per-reviewer CSV keyed by file stem and merged as a new column into the master
 genotype sheet.
 
@@ -49,7 +49,17 @@ DEFAULT_PHIGH = 99.5   # vmax percentile
 CHANNEL_MAX_SIZE = 4
 
 # Valid scoring calls.
-CALLS = ("WT", "KO", "IDK")
+CALLS = ("MorphologyA", "MorphologyB", "IDK")
+
+# Legacy WT/KO labels map onto the current morphology labels. Applied when
+# reading a ground-truth sheet so older WT/KO sheets still score correctly.
+LEGACY_CALL_ALIASES = {"WT": "MorphologyA", "KO": "MorphologyB"}
+
+
+def normalize_call(value):
+    """Canonicalize a call/truth label, mapping legacy WT/KO to Morphology A/B."""
+    v = str(value).strip()
+    return LEGACY_CALL_ALIASES.get(v.upper(), v)
 
 # Columns of the per-reviewer CSV, in order.
 REVIEWER_CSV_COLUMNS = [
@@ -203,7 +213,7 @@ def merge_calls_into_master(master_df, calls, reviewer,
         Must contain a ``FILE`` column of stems. Existing column order is
         preserved; the new reviewer column is appended at the right.
     calls : dict
-        Mapping of file stem -> call string (e.g. ``{"S9MEF_01": "WT"}``).
+        Mapping of file stem -> call string (e.g. ``{"S9MEF_01": "MorphologyA"}``).
     reviewer : str
         Original reviewer name; becomes the new column header.
     allow_new_rows : bool
@@ -291,7 +301,7 @@ def load_ground_truth(path):
     for k, v in zip(df[key_col], df[val_col]):
         stem = str(k).strip()
         if stem:
-            truth[stem] = str(v).strip().upper()
+            truth[stem] = normalize_call(v)
     return truth
 
 
@@ -299,20 +309,21 @@ def score_against_truth(records, truth):
     """Compare a reviewer's calls to ground truth.
 
     Only images that were scored *and* appear in ``truth`` are counted. An
-    ``IDK`` never matches a WT/KO truth, so it counts as incorrect (but is also
-    tallied separately). Returns a dict with ``n_compared``, ``n_correct``,
-    ``n_idk`` and ``accuracy`` (percent, 0.0 when nothing is comparable).
+    ``IDK`` never matches a MorphologyA/MorphologyB truth, so it counts as
+    incorrect (but is also tallied separately). Returns a dict with
+    ``n_compared``, ``n_correct``, ``n_idk`` and ``accuracy`` (percent, 0.0 when
+    nothing is comparable).
     """
     n_compared = n_correct = n_idk = 0
     for r in records:
         stem = r["FILE"]
         if stem not in truth:
             continue
-        call = str(r["call"]).strip().upper()
+        call = normalize_call(r["call"])
         n_compared += 1
-        if call == "IDK":
+        if call.upper() == "IDK":
             n_idk += 1
-        if call == truth[stem]:
+        if call.upper() == str(truth[stem]).upper():
             n_correct += 1
     accuracy = (100.0 * n_correct / n_compared) if n_compared else 0.0
     return {
@@ -332,7 +343,7 @@ def funny_verdict(accuracy):
     if accuracy >= 100:
         return ("Flawless. The microscope works for YOU now.", "happy")
     if accuracy >= 90:
-        return ("Basically a WT/KO oracle. Spooky good.", "happy")
+        return ("Basically a MorphologyA/MorphologyB oracle. Spooky good.", "happy")
     if accuracy >= 75:
         return ("Solid work - your PhD is safe today.", "happy")
     if accuracy >= 50:
@@ -444,22 +455,24 @@ def run_gui(files, reviewer, p_low, p_high, on_record):
     s_min.on_changed(lambda _v: _apply_limits())
     s_max.on_changed(lambda _v: _apply_limits())
 
-    ax_wt = fig.add_axes([0.15, 0.04, 0.20, 0.07])
-    ax_ko = fig.add_axes([0.40, 0.04, 0.20, 0.07])
-    ax_idk = fig.add_axes([0.65, 0.04, 0.20, 0.07])
-    b_wt = Button(ax_wt, "WT", color="#4caf50", hovercolor="#66bb6a")
-    b_ko = Button(ax_ko, "KO", color="#e53935", hovercolor="#ef5350")
+    ax_a = fig.add_axes([0.05, 0.04, 0.32, 0.07])
+    ax_b = fig.add_axes([0.39, 0.04, 0.32, 0.07])
+    ax_idk = fig.add_axes([0.73, 0.04, 0.20, 0.07])
+    b_a = Button(ax_a, "MorphologyA", color="#4caf50", hovercolor="#66bb6a")
+    b_b = Button(ax_b, "MorphologyB", color="#e53935", hovercolor="#ef5350")
     b_idk = Button(ax_idk, "IDK", color="#9e9e9e", hovercolor="#bdbdbd")
-    b_wt.on_clicked(lambda _e: _record_and_advance("WT"))
-    b_ko.on_clicked(lambda _e: _record_and_advance("KO"))
+    for _b in (b_a, b_b, b_idk):
+        _b.label.set_fontsize(11)
+    b_a.on_clicked(lambda _e: _record_and_advance("MorphologyA"))
+    b_b.on_clicked(lambda _e: _record_and_advance("MorphologyB"))
     b_idk.on_clicked(lambda _e: _record_and_advance("IDK"))
 
     def _on_key(event):
         key = (event.key or "").lower()
-        if key in ("1", "w"):
-            _record_and_advance("WT")
-        elif key in ("2", "k"):
-            _record_and_advance("KO")
+        if key in ("1", "a"):
+            _record_and_advance("MorphologyA")
+        elif key in ("2", "b"):
+            _record_and_advance("MorphologyB")
         elif key in ("3", "i"):
             _record_and_advance("IDK")
         elif key == "r":
@@ -568,7 +581,7 @@ def show_results_gui(result, reviewer):
 def main(input_directory, reviewer, genotype_csv, output_directory, seed,
          input_pattern, p_low, p_high, allow_new_rows, overwrite_column,
          ground_truth, dry_run):
-    """Blindly score TIFFs as WT / KO / IDK and record the calls.
+    """Blindly score TIFFs as MorphologyA / MorphologyB / IDK and record the calls.
 
     This utility is standalone and is not part of the analysis pipeline.
     """

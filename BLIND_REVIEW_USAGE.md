@@ -3,8 +3,8 @@
 ## Overview
 
 `mito_blind_review` is a **standalone** utility for blindly scoring microscopy
-images as `WT`, `KO`, or `IDK`. It exists so that the manual genotype-scoring
-procedure is documented and reproducible for reviewers.
+images as `MorphologyA`, `MorphologyB`, or `IDK`. It exists so that the manual
+genotype-scoring procedure is documented and reproducible for reviewers.
 
 **It is not part of the analysis pipeline.** Nothing in the pipeline imports it,
 and it imports nothing from the pipeline modules. Removing it would not affect
@@ -65,9 +65,12 @@ window showing the **percent accuracy**, a score-dependent cartoon face, and a
 - The sheet is auto-delimited (the example is tab-separated) and uses the
   `BLINDED` (stem) and `Ground_Truth` (call) columns, falling back to the first
   and last columns if those names are absent.
+- Legacy `WT`/`KO` truth values (any case) are automatically mapped onto
+  `MorphologyA`/`MorphologyB`, so an older ground-truth sheet still scores
+  correctly.
 - Only images that were **scored and present in the truth sheet** are counted.
-- An `IDK` never matches a WT/KO truth, so it counts as incorrect (but is also
-  tallied separately in the printed summary).
+- An `IDK` never matches a MorphologyA/MorphologyB truth, so it counts as
+  incorrect (but is also tallied separately in the printed summary).
 - With `--dry-run`, accuracy is computed and printed but no window opens.
 
 ```bash
@@ -81,8 +84,8 @@ mito_blind_review \
 
 | Action | Button | Keys |
 |--------|--------|------|
-| Call **WT** | green `WT` | `1` or `w` |
-| Call **KO** | red `KO` | `2` or `k` |
+| Call **MorphologyA** | green `MorphologyA` | `1` or `a` |
+| Call **MorphologyB** | red `MorphologyB` | `2` or `b` |
 | Call **IDK** (unsure) | gray `IDK` | `3` or `i` |
 | Reset contrast to auto | — | `r` |
 
